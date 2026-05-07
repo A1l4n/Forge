@@ -1,0 +1,75 @@
+[package]
+name = "forge"
+version = "0.1.0"
+edition = "2021"
+authors = ["Forge Team <dev@forge.ai>"]
+license = "MIT"
+description = "Forge - Agentic Operating System powered by Claude"
+repository = "https://github.com/forge-ai/forge"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# Web framework
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "cors", "compression-gzip"] }
+
+# Database
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls", "migrate"] }
+rusqlite = { version = "0.30", features = ["bundled"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json", "stream"] }
+
+# UUID
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# CLI/TUI
+clap = { version = "4.4", features = ["derive", "env"] }
+crossterm = "0.27"
+ratatui = "0.25"
+
+# Utilities
+async-trait = "0.1"
+futures = "0.3"
+parking_lot = "0.12"
+dashmap = "5.5"
+
+# Embeddings (Phase 2)
+# ort = "1.15"  # ONNX Runtime for embeddings
+# candle = "0.2"  # Hugging Face Candle
+
+[dev-dependencies]
+mockito = "1.2"
+tokio-test = "0.4"
+
+[[bin]]
+name = "forge"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1
