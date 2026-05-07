@@ -1,29 +1,53 @@
-//! Specialist agents module.
-//!
-//! Houses the `Agent` trait and the four built-in specialists that Luna delegates to:
-//! [`CodeAgent`], [`ResearchAgent`], [`WritingAgent`], and [`PlanningAgent`].
+use async_trait::async_trait;
+use crate::Result;
+use crate::models::{Task, ExecutionContext};
 
-pub mod base;
-pub mod code_agent;
-pub mod research_agent;
-pub mod writing_agent;
-pub mod planning_agent;
+#[async_trait]
+pub trait Agent: Send + Sync {
+    fn name(&self) -> &str;
+    fn role(&self) -> &str;
+    fn system_prompt(&self) -> String;
+    async fn execute(&self, task: Task, context: &ExecutionContext) -> Result<String>;
+}
 
-pub use base::Agent;
-pub use code_agent::CodeAgent;
-pub use research_agent::{Finding, ResearchAgent};
-pub use writing_agent::{WritingAgent, WritingStyle};
-pub use planning_agent::{PlanStep, PlanningAgent};
+pub struct CodeAgent;
 
-use crate::claude::ClaudeClient;
-use std::sync::Arc;
+#[async_trait]
+impl Agent for CodeAgent {
+    fn name(&self) -> &str {
+        "CodeAgent"
+    }
 
-/// Build the default set of specialist agents wired to a shared Claude client.
-pub fn default_agents(claude: Arc<ClaudeClient>) -> Vec<Arc<dyn Agent>> {
-    vec![
-        Arc::new(CodeAgent::new(claude.clone())),
-        Arc::new(ResearchAgent::new(claude.clone())),
-        Arc::new(WritingAgent::new(claude.clone())),
-        Arc::new(PlanningAgent::new(claude)),
-    ]
+    fn role(&self) -> &str {
+        "Code generation and analysis specialist"
+    }
+
+    fn system_prompt(&self) -> String {
+        "You are a code generation expert. Write clean, efficient, and well-documented code.".to_string()
+    }
+
+    async fn execute(&self, task: Task, _context: &ExecutionContext) -> Result<String> {
+        Ok(format!("CodeAgent processing: {}", task.description))
+    }
+}
+
+pub struct ResearchAgent;
+
+#[async_trait]
+impl Agent for ResearchAgent {
+    fn name(&self) -> &str {
+        "ResearchAgent"
+    }
+
+    fn role(&self) -> &str {
+        "Research and analysis specialist"
+    }
+
+    fn system_prompt(&self) -> String {
+        "You are a research expert. Provide thorough, well-sourced analysis.".to_string()
+    }
+
+    async fn execute(&self, task: Task, _context: &ExecutionContext) -> Result<String> {
+        Ok(format!("ResearchAgent processing: {}", task.description))
+    }
 }
