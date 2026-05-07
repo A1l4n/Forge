@@ -46,4 +46,14 @@ impl ClaudeClient {
             .map(|s| s.to_string())
             .ok_or_else(|| ForgeError::ApiError("Invalid response format".to_string()))
     }
+
+    pub fn extract_text(response: &serde_json::Value) -> Result<String> {
+        response
+            .get("content")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("text"))
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| ForgeError::ApiError("Invalid response format".to_string()))
+    }
 }
