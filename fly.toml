@@ -33,9 +33,16 @@ primary_region = "iad"  # change to your nearest region: lax, ord, fra, syd, etc
   # Forge-specific env. Override the backend by editing this:
   # FORGE_BACKEND = "groq"
 
-[[mounts]]
-  source = "forge_data"
-  destination = "/data"
+# Persistent volume — uncomment AFTER creating the volume on Fly.
+# First deploy: leave commented so the app boots without a volume (Luna's
+# memory will be ephemeral until the volume is mounted).
+# Then: in the Fly dashboard for this app, go to Storage → Create volume,
+# name it `forge_data`, size 1 GB, same region as the app. Uncomment these
+# 3 lines, push, and redeploy.
+#
+# [[mounts]]
+#   source = "forge_data"
+#   destination = "/data"
 
 [http_service]
   internal_port = 8080
