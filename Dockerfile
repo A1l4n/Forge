@@ -1,7 +1,7 @@
 # Multi-stage build: compile Forge in a Rust container, run in a slim Debian.
 # Fly.io builds this remotely, so you don't need a Linux toolchain locally.
 
-FROM rust:1.85-slim-bookworm AS builder
+FROM rust:1.86-slim-bookworm AS builder
 WORKDIR /usr/src/forge
 
 # System deps for sqlite + reqwest TLS.
