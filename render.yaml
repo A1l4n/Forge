@@ -1,0 +1,44 @@
+# Render.com deployment config.
+# Render reads this on every push to deploy/redeploy automatically.
+#
+# One-time setup (~3 minutes):
+#   1. Sign up at render.com — free, no credit card needed.
+#   2. Click "New +" → "Web Service" → connect your GitHub.
+#   3. Pick the A1l4n/Forge repo. Render auto-detects this file.
+#   4. On the Environment tab BEFORE deploying, add the two secrets:
+#        FORGE_AUTH_TOKEN = (the token I generated)
+#        GROQ_API_KEY     = (your Groq key)
+#   5. Click "Create Web Service".
+#
+# After deploy: Render gives you https://forge-luna.onrender.com (or whatever
+# you named it). Open it, paste the auth token once, you're in.
+#
+# Free-tier caveats:
+# - 512 MB RAM (tight for Rust release builds; if it OOMs during build,
+#   switch to "Starter" plan at $7/mo with 512 MB and faster CPU).
+# - Spins down after 15 minutes of inactivity → first request after idle
+#   takes ~30 seconds to wake the dyno.
+# - No persistent disk → /app is ephemeral. Luna's SQLite db lives at
+#   /data/forge.db (Dockerfile sets that), but on free tier that wipes
+#   on every restart. Memories WILL be lost on each cold start.
+#   To keep memory across restarts: upgrade to a Render disk ($1/mo for
+#   1 GB), or move to Hugging Face Spaces, or run on your laptop via
+#   cloudflared.
+
+services:
+  - type: web
+    name: forge-luna
+    runtime: docker
+    plan: free
+    region: frankfurt          # closest to France; alternatives: oregon, ohio, singapore
+    branch: main
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: RUST_LOG
+        value: info
+      - key: FORGE_AUTH_TOKEN
+        sync: false            # set in Render dashboard, never commit
+      - key: GROQ_API_KEY
+        sync: false            # set in Render dashboard, never commit
