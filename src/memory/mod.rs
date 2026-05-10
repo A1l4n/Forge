@@ -3,5 +3,6 @@
 pub mod store;
 
 pub use store::{
-    AgentStats, DashboardStats, DynamicAgentRow, Memory, MemoryStore, SessionSummary, Skill,
+    ActiveTask, AgentStats, DashboardStats, DynamicAgentRow, Memory, MemoryStore, SessionSummary,
+    Skill,
 };

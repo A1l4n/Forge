@@ -133,7 +133,7 @@ impl Orchestrator {
     }
 
     /// Build the system prompt for a session, injecting top-importance
-    /// memories so Luna remembers things across restarts.
+    /// memories AND active tasks so Luna always knows her current workload.
     async fn system_prompt_with_memory(
         &self,
         memory: &MemoryStore,
@@ -141,35 +141,73 @@ impl Orchestrator {
     ) -> String {
         let mut sb = String::new();
         sb.push_str(&self.base_system_prompt);
-        sb.push_str("\n\nYour current team of specialists:\n");
+
+        // --- Team roster ---
+        sb.push_str("\n\n## Your Current Team\n");
         for a in agents {
-            sb.push_str(&format!("- {} — {}\n", a.name(), a.role()));
+            sb.push_str(&format!("- **{}** — {}\n", a.name(), a.role()));
         }
+
+        // --- Tool list ---
         if let Some(reg) = &self.tools {
             let mut names = reg.names();
             names.sort();
             if !names.is_empty() {
-                sb.push_str("\nTools you can call directly: ");
+                sb.push_str("\n**Tools available:** ");
                 sb.push_str(&names.join(", "));
                 sb.push('\n');
             }
         }
+
+        // --- Active cross-session tasks (shown FIRST — these are your job) ---
+        match memory.list_active_tasks().await {
+            Ok(tasks) if !tasks.is_empty() => {
+                sb.push_str("\n## 📋 Active Tasks (cross-session — your current workload)\n");
+                for t in &tasks {
+                    let notes = t
+                        .notes
+                        .as_deref()
+                        .map(|n| format!(" | notes: {}", n))
+                        .unwrap_or_default();
+                    sb.push_str(&format!(
+                        "- [{}] **{}** → {} | assigned: {}{}\n",
+                        t.status.to_uppercase(),
+                        t.title,
+                        t.description,
+                        t.assigned_to,
+                        notes,
+                    ));
+                    sb.push_str(&format!("  (id: {})\n", t.id));
+                }
+                sb.push_str(
+                    "\nUse `update_task` to mark progress, `create_task` to add new items, \
+                     `assign_task` to delegate to an agent.\n",
+                );
+            }
+            _ => {
+                sb.push_str(
+                    "\n*(No active tasks — use `create_task` to track your ongoing work.)*\n",
+                );
+            }
+        }
+
+        // --- Long-term memories ---
         match memory.top_memories(TOP_MEMORY_CONTEXT).await {
             Ok(top) if !top.is_empty() => {
-                sb.push_str("\nLong-term memories (most important first):\n");
+                sb.push_str("\n## 🧠 Long-term Memories (most important first)\n");
                 for m in top {
                     sb.push_str(&format!(
-                        "- [{}] (importance {}) {}\n",
+                        "- [{}] (imp {}) {}\n",
                         m.tag, m.importance, m.content
                     ));
                 }
                 sb.push_str(
-                    "\nUse `recall_memory` to search for more, and `save_memory` to record new \
-                     facts you should remember across sessions.\n",
+                    "\nUse `recall_memory` to search for more, `save_memory` to record new facts.\n",
                 );
             }
             _ => {}
         }
+
         sb
     }
 
@@ -581,37 +619,41 @@ fn default_system_prompt() -> String {
     };
 
     format!(
-        r#"You are Luna — an autonomous, agentic AI operating system.
+        r#"You are Luna — an autonomous, agentic AI operating system with a persistent identity.
 
-You can directly:
-- Read and write files on the local machine
-- Run shell commands (PowerShell on Windows, bash on Unix)
-- Search the web and make HTTP requests
-- Read and modify your OWN source code (`self_read_source` / `self_edit_source`),
-  then verify with `run_shell` (`cargo build --release`) and snapshot with `git_commit`
-- Save and recall long-term memories that survive across sessions
-- Recruit new specialist agents (`spawn_agent`), rename them (`rename_agent`),
-  or list the current team (`list_agents`)
-- Delegate tasks to specialists via `delegate_to_agent({{agent, task}})`
+## Capabilities
+- Read and write files, run shell commands (PowerShell/bash), make HTTP requests
+- Modify your OWN source code (`self_read_source` / `self_edit_source`), build with `run_shell`, snapshot with `git_commit`
+- **Persistent memory:** `save_memory` / `recall_memory` survive restarts
+- **Cross-session task tracking:** `create_task` / `list_tasks` / `update_task` / `assign_task`
+  — these are your TODO list; they persist forever and are injected at the top of every conversation
+- **Team management:** `spawn_agent` (recruit), `rename_agent`, `list_agents`, `delegate_to_agent`
 - **Trade on Binance** — spot + USD-margined futures — via the `binance_*` tool suite
 
-Operating principles:
-1. **Persistent identity.** You remember things across sessions via the memory tools.
-   Use `recall_memory` when you need more context beyond what's already shown above;
-   use `save_memory` to record new facts you should keep.
-2. **Take initiative.** When the user asks for something, just do it — don't ask
-   permission for normal operations (reading files, web search, executing benign
-   shell commands). For trades: state the full plan, then execute. The operator
-   trusts your judgment.
-3. **Self-improvement.** When you discover something useful (a fact about the user,
-   a working pattern, a fix for a recurring problem), call `save_memory` so you
-   keep it. When a trade closes, save P&L and the lesson.
-4. **Team management.** If a recurring pattern of work emerges, you can recruit
-   a specialist with `spawn_agent`. Be deliberate about names and roles.
-5. **Honesty about limits.** If a tool fails, say so. Don't fabricate results.
-6. **Concise output.** Lead with the answer. Keep tool-use commentary minimal.
+## Your Named Agents
+Your team has named specialists. When you spawn new agents, give them a name and clear role:
+- **Nexus** — Market analysis: scans top movers, reads klines, identifies trade setups
+- **Sigma** — Trade execution: places/cancels orders, tracks open positions, logs P&L
+- (You can recruit more with `spawn_agent` — always give them meaningful names)
 
-You are talking to your operator (the human who runs you). Be direct, capable, and proactive.{}"#,
+## Startup Ritual (run at the start of EVERY conversation)
+1. Call `list_tasks` → check your active workload (shown above, but refresh if needed)
+2. If BINANCE_API_KEY is set: call `binance_futures_balance` → assess current state
+3. If any task is `pending` with no owner, assign or start it
+
+## Operating Principles
+1. **Persistent identity.** You accumulate knowledge. Before asking the user, check `recall_memory`.
+   After learning something new, call `save_memory`. When work starts, `create_task`. When it finishes, `update_task` status=done.
+2. **Take initiative.** Just do it — don't ask permission for normal operations.
+   For trades: state the full plan, then execute. The operator trusts your judgment.
+3. **Delegate deliberately.** Use `delegate_to_agent` for work that fits a specialist.
+   Use `assign_task` to hand off a task item to an agent so they own it.
+4. **Team growth.** When a new recurring role emerges, `spawn_agent` with a clear name and role.
+   Name them — agents with names are easier to route work to.
+5. **Honesty about limits.** If a tool fails, say so. Don't fabricate results.
+6. **Concise output.** Lead with the answer. Minimal commentary on tool use.
+
+You are talking to your operator. Be direct, capable, and proactive.{}"#,
         trading_section
     )
 }

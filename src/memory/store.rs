@@ -40,6 +40,20 @@ pub struct Memory {
     pub last_accessed: DateTime<Utc>,
 }
 
+/// A cross-session persistent task Luna tracks across restarts.
+/// Unlike `Task` (which is session-scoped), these survive indefinitely.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ActiveTask {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub assigned_to: String,
+    pub status: String, // "pending" | "in_progress" | "blocked" | "done"
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// A dynamic agent recruited at runtime by Luna (or the user). Persists across
 /// process restarts so the team grows over time.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -241,6 +255,28 @@ impl MemoryStore {
         )
         .execute(&self.pool)
         .await?;
+
+        // Cross-session tasks: survive across restarts, not tied to a session.
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS active_tasks (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                assigned_to TEXT NOT NULL DEFAULT 'Luna',
+                status TEXT NOT NULL DEFAULT 'pending',
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_active_tasks_status ON active_tasks(status);")
+            .execute(&self.pool)
+            .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);")
             .execute(&self.pool)
@@ -861,6 +897,129 @@ impl MemoryStore {
             .execute(&self.pool)
             .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    // ---------- Cross-session active tasks ----------
+
+    /// Create a new persistent task.
+    pub async fn create_active_task(
+        &self,
+        title: &str,
+        description: &str,
+        assigned_to: &str,
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT INTO active_tasks (id, title, description, assigned_to, status, notes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'pending', NULL, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(title)
+        .bind(description)
+        .bind(assigned_to)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        debug!(task_id = %id, title = %title, "Active task created");
+        Ok(id)
+    }
+
+    /// List all non-done active tasks (status != 'done').
+    pub async fn list_active_tasks(&self) -> Result<Vec<ActiveTask>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, title, description, assigned_to, status, notes, created_at, updated_at
+            FROM active_tasks
+            WHERE status != 'done'
+            ORDER BY datetime(created_at) ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Self::active_tasks_from_rows(rows)
+    }
+
+    /// List ALL tasks including done ones.
+    pub async fn list_all_active_tasks(&self) -> Result<Vec<ActiveTask>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, title, description, assigned_to, status, notes, created_at, updated_at
+            FROM active_tasks
+            ORDER BY datetime(created_at) ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Self::active_tasks_from_rows(rows)
+    }
+
+    /// Update status and optional notes for a task.
+    pub async fn update_active_task(
+        &self,
+        id: &str,
+        status: &str,
+        notes: Option<&str>,
+    ) -> Result<bool> {
+        let now = Utc::now().to_rfc3339();
+        let res = sqlx::query(
+            r#"
+            UPDATE active_tasks
+            SET status = ?, notes = COALESCE(?, notes), updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(status)
+        .bind(notes)
+        .bind(&now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Reassign a task to a different agent.
+    pub async fn assign_active_task(&self, id: &str, assigned_to: &str) -> Result<bool> {
+        let now = Utc::now().to_rfc3339();
+        let res = sqlx::query(
+            "UPDATE active_tasks SET assigned_to = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(assigned_to)
+        .bind(&now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Delete a task by id.
+    pub async fn delete_active_task(&self, id: &str) -> Result<bool> {
+        let res = sqlx::query("DELETE FROM active_tasks WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    fn active_tasks_from_rows(rows: Vec<sqlx::sqlite::SqliteRow>) -> Result<Vec<ActiveTask>> {
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let notes: Option<String> = r.try_get("notes").ok().flatten();
+            out.push(ActiveTask {
+                id: r.try_get("id")?,
+                title: r.try_get("title")?,
+                description: r.try_get("description")?,
+                assigned_to: r.try_get("assigned_to")?,
+                status: r.try_get("status")?,
+                notes,
+                created_at: parse_dt(r.try_get("created_at")?)?,
+                updated_at: parse_dt(r.try_get("updated_at")?)?,
+            });
+        }
+        Ok(out)
     }
 }
 

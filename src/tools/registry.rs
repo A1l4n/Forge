@@ -291,6 +291,7 @@ impl ToolRegistry {
     pub fn with_full_toolkit(memory: Arc<MemoryStore>) -> Self {
         let mut r = Self::with_built_in_tools();
         Self::register_memory(&mut r, memory.clone());
+        Self::register_tasks(&mut r, memory.clone());
         Self::register_team(&mut r, memory.clone());
         Self::register_skills(&mut r, memory);
         Self::register_wallet(&mut r);
@@ -627,6 +628,101 @@ impl ToolRegistry {
             Arc::new(MemoryToolExecutor {
                 memory,
                 f: builtin::list_agents,
+            }),
+        );
+    }
+
+    fn register_tasks(r: &mut Self, memory: Arc<MemoryStore>) {
+        r.register_with(
+            Tool::new(
+                "create_task".into(),
+                "Create a persistent cross-session task. \
+                 These tasks survive restarts and are shown to you at the start of every \
+                 conversation. Use this to track your ongoing work (e.g. trading mission, \
+                 analysis jobs, follow-up items). Assign to yourself or a named agent."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string", "description": "Short task name." },
+                        "description": { "type": "string", "description": "Full description of what needs to be done." },
+                        "assigned_to": { "type": "string", "description": "Who owns this task (default: Luna). Can be an agent name." }
+                    },
+                    "required": ["title","description"]
+                }),
+            ),
+            Arc::new(MemoryToolExecutor {
+                memory: memory.clone(),
+                f: builtin::create_task_item,
+            }),
+        );
+
+        r.register_with(
+            Tool::new(
+                "list_tasks".into(),
+                "List all active cross-session tasks (those not yet marked 'done'). \
+                 Call this at the start of each conversation to know what you're working on."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "include_done": {
+                            "type": "boolean",
+                            "description": "If true, also return completed/done tasks. Default false."
+                        }
+                    }
+                }),
+            ),
+            Arc::new(MemoryToolExecutor {
+                memory: memory.clone(),
+                f: builtin::list_task_items,
+            }),
+        );
+
+        r.register_with(
+            Tool::new(
+                "update_task".into(),
+                "Update the status (and optionally notes) of a cross-session task. \
+                 Valid statuses: pending, in_progress, blocked, done."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Task ID from create_task or list_tasks." },
+                        "status": {
+                            "type": "string",
+                            "enum": ["pending","in_progress","blocked","done"],
+                            "description": "New status."
+                        },
+                        "notes": { "type": "string", "description": "Optional progress notes or result summary." }
+                    },
+                    "required": ["id","status"]
+                }),
+            ),
+            Arc::new(MemoryToolExecutor {
+                memory: memory.clone(),
+                f: builtin::update_task_item,
+            }),
+        );
+
+        r.register_with(
+            Tool::new(
+                "assign_task".into(),
+                "Reassign a cross-session task to a different agent. \
+                 The agent name should match one on your team (use list_agents to check)."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "Task ID." },
+                        "assigned_to": { "type": "string", "description": "Agent name to assign to." }
+                    },
+                    "required": ["id","assigned_to"]
+                }),
+            ),
+            Arc::new(MemoryToolExecutor {
+                memory,
+                f: builtin::assign_task_item,
             }),
         );
     }
@@ -2618,6 +2714,62 @@ mod builtin {
             end -= 1;
         }
         format!("{}\n... [truncated, original was {} bytes]", &s[..end], s.len())
+    }
+
+    // ---- cross-session task management ----
+
+    pub async fn create_task_item(memory: Arc<MemoryStore>, input: ToolInput) -> Result<Value> {
+        let title = input
+            .get_string("title")
+            .ok_or_else(|| Error::ToolExecution("missing 'title'".into()))?;
+        let description = input
+            .get_string("description")
+            .ok_or_else(|| Error::ToolExecution("missing 'description'".into()))?;
+        let assigned_to = input.get_string("assigned_to").unwrap_or_else(|| "Luna".into());
+        let id = memory.create_active_task(&title, &description, &assigned_to).await?;
+        Ok(json!({
+            "id": id,
+            "title": title,
+            "assigned_to": assigned_to,
+            "status": "pending",
+            "created": true,
+        }))
+    }
+
+    pub async fn list_task_items(memory: Arc<MemoryStore>, input: ToolInput) -> Result<Value> {
+        let include_done = input
+            .get_bool("include_done")
+            .unwrap_or(false);
+        let tasks = if include_done {
+            memory.list_all_active_tasks().await?
+        } else {
+            memory.list_active_tasks().await?
+        };
+        let count = tasks.len();
+        Ok(json!({"count": count, "tasks": tasks}))
+    }
+
+    pub async fn update_task_item(memory: Arc<MemoryStore>, input: ToolInput) -> Result<Value> {
+        let id = input
+            .get_string("id")
+            .ok_or_else(|| Error::ToolExecution("missing 'id'".into()))?;
+        let status = input
+            .get_string("status")
+            .ok_or_else(|| Error::ToolExecution("missing 'status'".into()))?;
+        let notes = input.get_string("notes");
+        let updated = memory.update_active_task(&id, &status, notes.as_deref()).await?;
+        Ok(json!({"id": id, "status": status, "updated": updated}))
+    }
+
+    pub async fn assign_task_item(memory: Arc<MemoryStore>, input: ToolInput) -> Result<Value> {
+        let id = input
+            .get_string("id")
+            .ok_or_else(|| Error::ToolExecution("missing 'id'".into()))?;
+        let assigned_to = input
+            .get_string("assigned_to")
+            .ok_or_else(|| Error::ToolExecution("missing 'assigned_to'".into()))?;
+        let updated = memory.assign_active_task(&id, &assigned_to).await?;
+        Ok(json!({"id": id, "assigned_to": assigned_to, "updated": updated}))
     }
 }
 
