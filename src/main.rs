@@ -141,7 +141,7 @@ impl Backend {
             Backend::ClaudeOauth => "claude-opus-4-7",
             Backend::Ollama => "llama3.1",
             Backend::Openrouter => "meta-llama/llama-3.3-70b-instruct:free",
-            Backend::Groq => "llama3-groq-70b-8192-tool-use-preview",
+            Backend::Groq => "llama-3.3-70b-versatile",
             Backend::Glm => "glm-4-flash",
             Backend::Mistral => "mistral-small-latest",
             Backend::Cerebras => "llama3.1-70b",
