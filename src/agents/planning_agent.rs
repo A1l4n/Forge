@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 use crate::agents::Agent;
-use crate::claude::ClaudeClient;
+use crate::llm::LLMProvider;
 use crate::models::{ExecutionContext, Message, Task, TaskStatus};
 use crate::Result;
 
@@ -43,15 +43,15 @@ impl PlanStep {
 pub struct PlanningAgent {
     name: String,
     role: String,
-    claude: Arc<ClaudeClient>,
+    llm: Arc<dyn LLMProvider>,
 }
 
 impl PlanningAgent {
-    pub fn new(claude: Arc<ClaudeClient>) -> Self {
+    pub fn new(llm: Arc<dyn LLMProvider>) -> Self {
         Self {
             name: "PlanningAgent".to_string(),
             role: "Planning Specialist".to_string(),
-            claude,
+            llm,
         }
     }
 
@@ -169,11 +169,11 @@ Be ruthless about scope. The smallest plan that achieves the goal is the best pl
         )];
 
         let response = self
-            .claude
-            .message_from_history(self.system_prompt(), messages, None)
+            .llm
+            .generate(&self.system_prompt(), &messages, None)
             .await?;
 
-        Ok(ClaudeClient::extract_text(&response))
+        Ok(response.text)
     }
 
     fn can_handle(&self, task_description: &str) -> bool {

@@ -1,9 +1,26 @@
-# Rust
+# Rust build output (DO NOT commit — gigabytes)
 /target/
-Cargo.lock
+**/*.rs.bk
 *.rlib
 *.rmeta
-**/*.rs.bk
+
+# Note: Cargo.lock IS committed for binary crates (this one).
+
+# Local SQLite databases — Luna's memory & sessions, never commit
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+forge.db
+forge_test.db
+
+# Environment / secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.toml
 
 # IDE
 .vscode/
@@ -11,22 +28,22 @@ Cargo.lock
 *.swp
 *.swo
 *~
+
+# OS
 .DS_Store
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
+Thumbs.db
+desktop.ini
 
 # Logs
 logs/
 *.log
 
-# OS
-.DS_Store
-Thumbs.db
+# Local build helpers
+build_with_vs.bat
+
+# Backups
+*.bak
+*.tmp
+
+# Stray nested scaffold (has its own .git) — leftover from initial setup
+/Forge/

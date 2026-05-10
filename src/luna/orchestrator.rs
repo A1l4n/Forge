@@ -1,11 +1,18 @@
-//! Luna Orchestrator — coordinates specialist agents to fulfill user requests.
+//! Luna Orchestrator — the agentic core.
+//!
+//! Responsibilities:
+//! 1. Inject relevant long-term memories into Luna's system prompt.
+//! 2. Run a real multi-turn **agentic loop** with tool execution
+//!    (filesystem / shell / self-modification / memory / team management).
+//! 3. Optionally delegate to specialist agents in parallel for a planned flow.
+//! 4. Track per-session token usage with a hard budget cap.
 
-use serde_json::{json, Value};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::agents::Agent;
-use crate::claude::client::ClaudeClient;
+use crate::llm::{AgenticTurn, LLMProvider, LLMResponse, StopReason, ToolCallInfo, ToolResultEntry};
 use crate::memory::MemoryStore;
 use crate::models::{
     AgentActivity, ExecutionContext, Message, Task, TaskStatus, ToolInput, UserRequest,
@@ -14,51 +21,86 @@ use crate::tools::ToolRegistry;
 use crate::{Error, Result};
 
 const DEFAULT_USER_ID: &str = "anonymous";
-const TOOL_LOOP_LIMIT: usize = 5;
+const DEFAULT_TOOL_LOOP_LIMIT: usize = 12;
+const TOP_MEMORY_CONTEXT: i64 = 8;
 
-/// Result of a multi-agent run, useful for surfacing per-agent activity in UIs.
+/// Per-session running token total (paperclip-inspired budget tracker).
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UsageTotals {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+impl UsageTotals {
+    pub fn add(&mut self, input: u32, output: u32) {
+        self.input_tokens = self.input_tokens.saturating_add(input as u64);
+        self.output_tokens = self.output_tokens.saturating_add(output as u64);
+    }
+
+    pub fn total(&self) -> u64 {
+        self.input_tokens.saturating_add(self.output_tokens)
+    }
+}
+
+/// Result of a multi-agent run.
 #[derive(Debug, Clone)]
 pub struct OrchestrationResult {
     pub response: String,
     pub activities: Vec<AgentActivity>,
+    pub usage: UsageTotals,
+    /// Names of tools Luna invoked while answering, in order.
+    pub tool_invocations: Vec<String>,
 }
 
 /// Luna — the main orchestrator.
 pub struct Orchestrator {
-    claude: Arc<ClaudeClient>,
-    system_prompt: String,
+    llm: Arc<dyn LLMProvider>,
+    base_system_prompt: String,
     max_iterations: usize,
+    /// Hard cap on total tokens spent per `process_*` call. None = uncapped.
+    token_budget: Option<u64>,
+    usage: Arc<Mutex<UsageTotals>>,
+    tools: Option<Arc<ToolRegistry>>,
 }
 
 impl Orchestrator {
-    pub fn new(claude: Arc<ClaudeClient>) -> Self {
-        let system_prompt = r#"You are Luna, an AI orchestrator that manages a team of specialist agents.
-
-Your role:
-1. Understand the user's request.
-2. Break it down into focused subtasks.
-3. Delegate to the right specialist (CodeAgent, ResearchAgent, WritingAgent, PlanningAgent).
-4. Coordinate their work — run independent steps in parallel, sequence dependencies.
-5. Synthesize results into a single, clear answer for the user.
-
-Available specialists:
-- CodeAgent — code, debugging, technical implementation.
-- ResearchAgent — research, analysis, summarization.
-- WritingAgent — documentation, content, editing.
-- PlanningAgent — task breakdown, workflow orchestration.
-
-Think systematically. Be concise. When you have enough information, give a complete answer."#
-            .to_string();
-
+    pub fn new(llm: Arc<dyn LLMProvider>) -> Self {
+        let base_system_prompt = default_system_prompt();
         Self {
-            claude,
-            system_prompt,
-            max_iterations: 5,
+            llm,
+            base_system_prompt,
+            max_iterations: DEFAULT_TOOL_LOOP_LIMIT,
+            token_budget: None,
+            usage: Arc::new(Mutex::new(UsageTotals::default())),
+            tools: None,
         }
     }
 
+    pub fn with_token_budget(mut self, budget: u64) -> Self {
+        self.token_budget = Some(budget);
+        self
+    }
+
+    pub fn with_tools(mut self, tools: Arc<ToolRegistry>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    pub fn with_max_iterations(mut self, n: usize) -> Self {
+        self.max_iterations = n;
+        self
+    }
+
     pub fn system_prompt(&self) -> &str {
-        &self.system_prompt
+        &self.base_system_prompt
+    }
+
+    pub fn provider_name(&self) -> &str {
+        self.llm.provider_name()
+    }
+
+    pub fn model(&self) -> &str {
+        self.llm.model()
     }
 
     pub fn create_task(
@@ -70,6 +112,67 @@ Think systematically. Be concise. When you have enough information, give a compl
         Task::new(session_id, agent_name, description)
     }
 
+    pub async fn current_usage(&self) -> UsageTotals {
+        self.usage.lock().await.clone()
+    }
+
+    /// Track usage and return an error if the running total exceeds the budget.
+    async fn record_usage(&self, response: &LLMResponse) -> Result<()> {
+        let mut totals = self.usage.lock().await;
+        totals.add(response.usage.input_tokens, response.usage.output_tokens);
+        if let Some(cap) = self.token_budget {
+            if totals.total() > cap {
+                return Err(Error::Orchestration(format!(
+                    "Token budget exceeded: {} > {} cap",
+                    totals.total(),
+                    cap
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Build the system prompt for a session, injecting top-importance
+    /// memories so Luna remembers things across restarts.
+    async fn system_prompt_with_memory(
+        &self,
+        memory: &MemoryStore,
+        agents: &[Arc<dyn Agent>],
+    ) -> String {
+        let mut sb = String::new();
+        sb.push_str(&self.base_system_prompt);
+        sb.push_str("\n\nYour current team of specialists:\n");
+        for a in agents {
+            sb.push_str(&format!("- {} — {}\n", a.name(), a.role()));
+        }
+        if let Some(reg) = &self.tools {
+            let mut names = reg.names();
+            names.sort();
+            if !names.is_empty() {
+                sb.push_str("\nTools you can call directly: ");
+                sb.push_str(&names.join(", "));
+                sb.push('\n');
+            }
+        }
+        match memory.top_memories(TOP_MEMORY_CONTEXT).await {
+            Ok(top) if !top.is_empty() => {
+                sb.push_str("\nLong-term memories (most important first):\n");
+                for m in top {
+                    sb.push_str(&format!(
+                        "- [{}] (importance {}) {}\n",
+                        m.tag, m.importance, m.content
+                    ));
+                }
+                sb.push_str(
+                    "\nUse `recall_memory` to search for more, and `save_memory` to record new \
+                     facts you should remember across sessions.\n",
+                );
+            }
+            _ => {}
+        }
+        sb
+    }
+
     /// Simple agentic loop without specialist agents — kept for backwards compatibility.
     pub async fn process(&self, request: UserRequest) -> Result<String> {
         info!(
@@ -78,46 +181,25 @@ Think systematically. Be concise. When you have enough information, give a compl
             truncate(&request.content, 50)
         );
 
-        let mut messages = vec![Message::user(
+        let messages = vec![Message::user(
             request.session_id.clone(),
             request.content.clone(),
         )];
 
-        for iteration in 0..self.max_iterations {
-            debug!(iteration, "Orchestrator iteration");
-
-            let response = self
-                .claude
-                .message_from_history(self.system_prompt.clone(), messages.clone(), None)
-                .await?;
-
-            let text = ClaudeClient::extract_text(&response);
-            messages.push(Message::luna(request.session_id.clone(), text.clone()));
-
-            if response.stop_reason == "end_turn" {
-                return Ok(text);
-            }
-
-            if ClaudeClient::has_tool_calls(&response) {
-                debug!("Luna made tool calls (no registry attached, breaking)");
-                return Ok(text);
-            }
-
-            if iteration == self.max_iterations - 1 {
-                return Ok(text);
-            }
-        }
-
-        Ok("Orchestration completed".to_string())
+        let response = self
+            .llm
+            .generate(&self.base_system_prompt, &messages, None)
+            .await?;
+        self.record_usage(&response).await?;
+        Ok(response.text)
     }
 
     /// Full agentic flow:
-    /// 1. Persist the user message.
-    /// 2. Ask Claude to produce a structured plan referencing available specialists.
-    /// 3. Dispatch each step to its specialist agent in parallel (when independent).
-    /// 4. Persist all task results.
-    /// 5. Ask Claude to synthesize a final response.
-    /// 6. Persist Luna's response and return it along with per-agent activity.
+    /// 1. Persist the user message + ensure session exists.
+    /// 2. Build a system prompt that includes top memories + the team roster.
+    /// 3. Run the agentic loop with tools enabled (Luna can read/write files,
+    ///    run shell commands, save/recall memory, recruit new agents, etc).
+    /// 4. Persist Luna's response.
     pub async fn process_with_agents(
         &self,
         request: UserRequest,
@@ -126,7 +208,7 @@ Think systematically. Be concise. When you have enough information, give a compl
     ) -> Result<OrchestrationResult> {
         info!(
             session_id = %request.session_id,
-            "Luna routing request through {} specialists",
+            "Luna processing request agentically with {} specialists",
             agents.len()
         );
 
@@ -137,252 +219,310 @@ Think systematically. Be concise. When you have enough information, give a compl
         let user_msg = Message::user(request.session_id.clone(), request.content.clone());
         memory.save_message(user_msg).await?;
 
-        // 1. Plan.
-        let plan = self.plan(&request, agents).await?;
-        debug!(steps = plan.steps.len(), "Planned");
+        let system_prompt = self.system_prompt_with_memory(memory, agents).await;
 
-        if plan.steps.is_empty() {
-            // No specialists needed — answer directly.
-            let response = self
-                .direct_response(&request)
-                .await?;
-            memory
-                .save_message(Message::luna(request.session_id.clone(), response.clone()))
-                .await?;
-            return Ok(OrchestrationResult {
-                response,
-                activities: vec![],
-            });
+        // Pull prior messages so Luna has conversational context.
+        let mut prior = memory.get_session_messages(&request.session_id).await?;
+        // Drop the user message we just inserted — we'll re-add it as the first turn below.
+        if let Some(last) = prior.last() {
+            if last.content == request.content {
+                prior.pop();
+            }
         }
 
-        // 2. Dispatch to specialists in parallel.
+        let result = if let Some(tools) = &self.tools {
+            self.run_agentic_loop(
+                &system_prompt,
+                &prior,
+                &request,
+                tools.clone(),
+                memory,
+                agents,
+            )
+            .await?
+        } else {
+            // No tools registered — fall back to a single LLM call.
+            let mut history = prior.clone();
+            history.push(Message::user(
+                request.session_id.clone(),
+                request.content.clone(),
+            ));
+            let response = self
+                .llm
+                .generate(&system_prompt, &history, None)
+                .await?;
+            self.record_usage(&response).await?;
+            OrchestrationResult {
+                response: response.text,
+                activities: vec![],
+                usage: self.current_usage().await,
+                tool_invocations: vec![],
+            }
+        };
+
+        memory
+            .save_message(Message::luna(
+                request.session_id.clone(),
+                result.response.clone(),
+            ))
+            .await?;
+
+        Ok(result)
+    }
+
+    /// The real agentic loop — keeps calling the LLM and executing tools until
+    /// the model returns a final answer (or we hit the iteration cap).
+    async fn run_agentic_loop(
+        &self,
+        system_prompt: &str,
+        prior: &[Message],
+        request: &UserRequest,
+        tools: Arc<ToolRegistry>,
+        memory: &MemoryStore,
+        agents: &[Arc<dyn Agent>],
+    ) -> Result<OrchestrationResult> {
+        let mut turns: Vec<AgenticTurn> = Vec::new();
+
+        // Replay prior session conversation so Luna has context.
+        for m in prior {
+            match m.role {
+                crate::models::MessageRole::User | crate::models::MessageRole::System => {
+                    turns.push(AgenticTurn::User(m.content.clone()));
+                }
+                crate::models::MessageRole::Luna | crate::models::MessageRole::Agent => {
+                    turns.push(AgenticTurn::Assistant {
+                        text: m.content.clone(),
+                        tool_calls: vec![],
+                    });
+                }
+            }
+        }
+        turns.push(AgenticTurn::User(request.content.clone()));
+
+        let mut tool_defs = tools.claude_tools();
+        // Synthetic tool: delegation. Handled by the loop, not the registry.
+        tool_defs.push(serde_json::json!({
+            "name": "delegate_to_agent",
+            "description": "Delegate a focused subtask to one of your specialist agents \
+                            (CodeAgent, ResearchAgent, WritingAgent, PlanningAgent, or any dynamic \
+                            agent on the team). Use this when a specialist's perspective will \
+                            give a better answer than handling it yourself.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "agent": { "type": "string", "description": "Agent name." },
+                    "task": { "type": "string", "description": "Imperative description of what they should do." }
+                },
+                "required": ["agent", "task"]
+            }
+        }));
+
+        let mut activities: Vec<AgentActivity> = Vec::new();
+        let mut tool_invocations: Vec<String> = Vec::new();
+        let mut final_text = String::new();
+
+        for iter in 0..self.max_iterations {
+            debug!(iter, "Agentic loop iteration");
+
+            let response = self
+                .llm
+                .agentic_step(system_prompt, &turns, &tool_defs)
+                .await?;
+            self.record_usage(&response).await?;
+
+            if response.tool_calls.is_empty() {
+                final_text = response.text;
+                break;
+            }
+
+            // Record assistant turn (text + tool calls).
+            turns.push(AgenticTurn::Assistant {
+                text: response.text.clone(),
+                tool_calls: response.tool_calls.clone(),
+            });
+
+            // Execute each tool call.
+            let mut results: Vec<ToolResultEntry> = Vec::with_capacity(response.tool_calls.len());
+            for call in &response.tool_calls {
+                tool_invocations.push(call.name.clone());
+
+                // Special pseudo-tool: delegate_to_agent
+                if call.name == "delegate_to_agent" {
+                    let entry = self.run_delegation(call, agents, memory, &request.session_id).await;
+                    activities.push(entry.0);
+                    results.push(entry.1);
+                    continue;
+                }
+
+                let started = std::time::Instant::now();
+                let result = tools
+                    .execute(
+                        &call.name,
+                        call.id.clone(),
+                        ToolInput::from_value(call.input.clone()),
+                    )
+                    .await;
+                let dur = started.elapsed().as_millis() as u64;
+
+                let (content, is_error) = match &result {
+                    Ok(r) if r.success => {
+                        (serde_json::to_string(&r.output).unwrap_or_else(|_| "{}".into()), false)
+                    }
+                    Ok(r) => (
+                        r.error
+                            .clone()
+                            .unwrap_or_else(|| "tool error".to_string()),
+                        true,
+                    ),
+                    Err(e) => (e.to_string(), true),
+                };
+
+                activities.push(AgentActivity {
+                    agent_name: format!("tool:{}", call.name),
+                    task_id: call.id.clone(),
+                    status: if is_error {
+                        TaskStatus::Failed.to_string()
+                    } else {
+                        TaskStatus::Completed.to_string()
+                    },
+                    result: Some(truncate(&content, 200).to_string()),
+                    duration_ms: dur,
+                });
+
+                results.push(ToolResultEntry {
+                    tool_use_id: call.id.clone(),
+                    content,
+                    is_error,
+                });
+            }
+
+            turns.push(AgenticTurn::ToolResults(results));
+
+            if response.stop_reason == StopReason::EndTurn && response.text.is_empty() {
+                continue;
+            }
+            if response.stop_reason == StopReason::EndTurn {
+                final_text = response.text;
+                break;
+            }
+        }
+
+        if final_text.is_empty() {
+            warn!(
+                "Agentic loop hit {} iterations without a final answer",
+                self.max_iterations
+            );
+            final_text = "(I ran out of tool-use iterations before finishing. \
+                          Try a more focused request.)"
+                .to_string();
+        }
+
+        Ok(OrchestrationResult {
+            response: final_text,
+            activities,
+            usage: self.current_usage().await,
+            tool_invocations,
+        })
+    }
+
+    /// Pseudo-tool: delegate a task to a specialist agent. The model calls
+    /// `delegate_to_agent({agent: "ResearchAgent", task: "..."})`.
+    async fn run_delegation(
+        &self,
+        call: &ToolCallInfo,
+        agents: &[Arc<dyn Agent>],
+        memory: &MemoryStore,
+        session_id: &str,
+    ) -> (AgentActivity, ToolResultEntry) {
+        let agent_name = call
+            .input
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let description = call
+            .input
+            .get("task")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let started = std::time::Instant::now();
+        let agent = match find_agent(agents, &agent_name) {
+            Some(a) => a,
+            None => {
+                let dur = started.elapsed().as_millis() as u64;
+                return (
+                    AgentActivity {
+                        agent_name: agent_name.clone(),
+                        task_id: call.id.clone(),
+                        status: TaskStatus::Failed.to_string(),
+                        result: Some("agent not found".into()),
+                        duration_ms: dur,
+                    },
+                    ToolResultEntry {
+                        tool_use_id: call.id.clone(),
+                        content: format!("No agent named '{}' on the team.", agent_name),
+                        is_error: true,
+                    },
+                );
+            }
+        };
+
+        let task = Task::new(
+            session_id.to_string(),
+            agent.name().to_string(),
+            description.clone(),
+        )
+        .start();
+        let _ = memory.save_task(task.clone()).await;
+
         let context = ExecutionContext {
-            session_id: request.session_id.clone(),
+            session_id: session_id.to_string(),
             user_id: DEFAULT_USER_ID.to_string(),
-            task_id: String::new(),
+            task_id: task.id.clone(),
             memory: Default::default(),
             available_tools: vec![],
         };
 
-        let mut handles = Vec::new();
-        for step in &plan.steps {
-            let agent = match find_agent(agents, &step.agent) {
-                Some(a) => a,
-                None => {
-                    warn!(agent = %step.agent, "Unknown specialist in plan, skipping");
-                    continue;
-                }
-            };
-
-            let task = Task::new(
-                request.session_id.clone(),
-                agent.name().to_string(),
-                step.description.clone(),
-            )
-            .start();
-
-            memory.save_task(task.clone()).await?;
-
-            let agent_clone = agent.clone();
-            let task_clone = task.clone();
-            let mut ctx = context.clone();
-            ctx.task_id = task.id.clone();
-
-            let memory_clone = memory.clone();
-            handles.push(tokio::spawn(async move {
-                let started = std::time::Instant::now();
-                let result = agent_clone.execute(task_clone.clone(), &ctx).await;
-                let duration_ms = started.elapsed().as_millis() as u64;
-
-                let (final_task, activity_status, activity_result) = match &result {
-                    Ok(out) => (
-                        task_clone.clone().complete(out.clone()),
-                        TaskStatus::Completed,
-                        Some(out.clone()),
-                    ),
-                    Err(e) => (
-                        task_clone.clone().fail(e.to_string()),
-                        TaskStatus::Failed,
-                        Some(e.to_string()),
-                    ),
-                };
-
-                let _ = memory_clone.update_task(final_task.clone()).await;
-
-                AgentActivity {
-                    agent_name: agent_clone.name().to_string(),
-                    task_id: task_clone.id,
-                    status: activity_status.to_string(),
-                    result: activity_result,
-                    duration_ms,
-                }
-            }));
-        }
-
-        let mut activities = Vec::new();
-        for h in handles {
-            if let Ok(act) = h.await {
-                activities.push(act);
-            }
-        }
-
-        // 3. Synthesize.
-        let synthesis = self.synthesize(&request, &activities).await?;
-
-        memory
-            .save_message(Message::luna(request.session_id.clone(), synthesis.clone()))
-            .await?;
-
-        Ok(OrchestrationResult {
-            response: synthesis,
-            activities,
-        })
-    }
-
-    /// Run a single task through a specific agent, allowing it to call tools.
-    pub async fn execute_with_tools(
-        &self,
-        task: Task,
-        tools: &ToolRegistry,
-    ) -> Result<String> {
-        let mut messages = vec![Message::user(task.session_id.clone(), task.description.clone())];
-        let claude_tools = tools.claude_tools();
-        let claude_tools_opt = if claude_tools.is_empty() {
-            None
-        } else {
-            Some(claude_tools)
-        };
-
-        for iteration in 0..TOOL_LOOP_LIMIT {
-            debug!(iteration, "Tool-execution iteration");
-
-            let response = self
-                .claude
-                .message_from_history(
-                    self.system_prompt.clone(),
-                    messages.clone(),
-                    claude_tools_opt.clone(),
+        let result = agent.execute(task.clone(), &context).await;
+        let dur = started.elapsed().as_millis() as u64;
+        match result {
+            Ok(out) => {
+                let _ = memory.update_task(task.clone().complete(out.clone())).await;
+                (
+                    AgentActivity {
+                        agent_name: agent.name().to_string(),
+                        task_id: task.id.clone(),
+                        status: TaskStatus::Completed.to_string(),
+                        result: Some(truncate(&out, 200).to_string()),
+                        duration_ms: dur,
+                    },
+                    ToolResultEntry {
+                        tool_use_id: call.id.clone(),
+                        content: out,
+                        is_error: false,
+                    },
                 )
-                .await?;
-
-            if !ClaudeClient::has_tool_calls(&response) {
-                let text = ClaudeClient::extract_text(&response);
-                return Ok(text);
             }
-
-            // Persist Luna's intermediate (tool-calling) message so the next
-            // turn can include the corresponding tool_result blocks.
-            let intermediate = ClaudeClient::extract_text(&response);
-            messages.push(Message::luna(task.session_id.clone(), intermediate));
-
-            let calls = ClaudeClient::extract_tool_calls(&response);
-            let mut tool_outputs: Vec<Value> = Vec::new();
-            for (id, name, input) in calls {
-                let result = tools
-                    .execute(&name, id.clone(), ToolInput::from_value(input))
-                    .await?;
-                tool_outputs.push(result.to_claude_format());
-            }
-
-            // Feed tool results back as a user message so Claude can react.
-            let tool_msg = Message::user(
-                task.session_id.clone(),
-                serde_json::to_string(&json!({ "tool_results": tool_outputs }))?,
-            );
-            messages.push(tool_msg);
-        }
-
-        Err(Error::Orchestration(
-            "Tool-execution loop exceeded maximum iterations".to_string(),
-        ))
-    }
-
-    // ---- internal helpers ----
-
-    async fn direct_response(&self, request: &UserRequest) -> Result<String> {
-        let messages = vec![Message::user(request.session_id.clone(), request.content.clone())];
-        let response = self
-            .claude
-            .message_from_history(self.system_prompt.clone(), messages, None)
-            .await?;
-        Ok(ClaudeClient::extract_text(&response))
-    }
-
-    async fn plan(&self, request: &UserRequest, agents: &[Arc<dyn Agent>]) -> Result<Plan> {
-        let agent_list = agents
-            .iter()
-            .map(|a| format!("- {} ({})", a.name(), a.role()))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let planner_prompt = format!(
-            r#"You are Luna's planner. Decompose the user request into 0–4 focused subtasks
-that can each be handled by ONE specialist. Independent subtasks will be run in parallel.
-
-Available specialists:
-{agents}
-
-Respond with a JSON object ONLY (no prose, no fences) of the form:
-{{
-  "steps": [
-    {{ "agent": "<AgentName>", "description": "<one short imperative sentence>" }}
-  ]
-}}
-
-If the request is small-talk or trivially answerable without specialists, return {{"steps": []}}."#,
-            agents = agent_list
-        );
-
-        let messages = vec![Message::user(request.session_id.clone(), request.content.clone())];
-        let response = self
-            .claude
-            .message_from_history(planner_prompt, messages, None)
-            .await?;
-        let raw = ClaudeClient::extract_text(&response);
-        let plan_json = extract_json_object(&raw).unwrap_or_else(|| raw.clone());
-
-        match serde_json::from_str::<Plan>(&plan_json) {
-            Ok(p) => Ok(p),
             Err(e) => {
-                warn!(error = %e, raw = %raw, "Plan parse failed, falling back to empty plan");
-                Ok(Plan { steps: Vec::new() })
+                let _ = memory.update_task(task.clone().fail(e.to_string())).await;
+                (
+                    AgentActivity {
+                        agent_name: agent.name().to_string(),
+                        task_id: task.id.clone(),
+                        status: TaskStatus::Failed.to_string(),
+                        result: Some(e.to_string()),
+                        duration_ms: dur,
+                    },
+                    ToolResultEntry {
+                        tool_use_id: call.id.clone(),
+                        content: e.to_string(),
+                        is_error: true,
+                    },
+                )
             }
         }
-    }
-
-    async fn synthesize(
-        &self,
-        request: &UserRequest,
-        activities: &[AgentActivity],
-    ) -> Result<String> {
-        let mut transcript = String::new();
-        transcript.push_str("User request:\n");
-        transcript.push_str(&request.content);
-        transcript.push_str("\n\nSpecialist results:\n");
-        for a in activities {
-            transcript.push_str(&format!(
-                "\n[{}] status={} duration={}ms\n{}\n",
-                a.agent_name,
-                a.status,
-                a.duration_ms,
-                a.result.clone().unwrap_or_default()
-            ));
-        }
-
-        let synth_prompt = r#"You are Luna. Several specialist agents have produced output for the user.
-Combine their outputs into a single, clear, friendly response addressed to the user.
-- Lead with the answer.
-- Preserve any code blocks verbatim.
-- Resolve conflicts between specialists by trusting the most relevant one.
-- Do NOT mention "agents" or internal coordination — just give the answer."#
-            .to_string();
-
-        let messages = vec![Message::user(request.session_id.clone(), transcript)];
-        let response = self
-            .claude
-            .message_from_history(synth_prompt, messages, None)
-            .await?;
-        Ok(ClaudeClient::extract_text(&response))
     }
 }
 
@@ -408,33 +548,37 @@ fn truncate(s: &str, n: usize) -> &str {
     &s[..end]
 }
 
-fn extract_json_object(text: &str) -> Option<String> {
-    let start = text.find('{')?;
-    let mut depth = 0i32;
-    for (i, ch) in text[start..].char_indices() {
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(text[start..start + i + 1].to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
+fn default_system_prompt() -> String {
+    r#"You are Luna — an autonomous, agentic AI operating system.
 
-#[derive(Debug, serde::Deserialize)]
-struct Plan {
-    steps: Vec<PlanStepJson>,
-}
+You can directly:
+- Read and write files on the local machine
+- Run shell commands (PowerShell on Windows, bash on Unix)
+- Search the web and make HTTP requests
+- Read and modify your OWN source code (`self_read_source` / `self_edit_source`),
+  then verify with `run_shell` (`cargo build --release`) and snapshot with `git_commit`
+- Save and recall long-term memories that survive across sessions
+- Recruit new specialist agents (`spawn_agent`), rename them (`rename_agent`),
+  or list the current team (`list_agents`)
+- Delegate tasks to specialists via `delegate_to_agent({agent, task})`
 
-#[derive(Debug, serde::Deserialize)]
-struct PlanStepJson {
-    agent: String,
-    description: String,
+Operating principles:
+1. **Persistent identity.** You remember things across sessions via the memory tools.
+   At the start of any new task, search memory for relevant context before asking the user.
+2. **Take initiative.** When the user asks for something, just do it — don't ask
+   permission for normal operations (reading files, web search, executing benign
+   shell commands). Confirm before destructive or irreversible actions
+   (deleting data, force-pushing, sending money, sending emails to real people).
+3. **Self-improvement.** When you discover something useful (a fact about the user,
+   a working pattern, a fix for a recurring problem), call `save_memory` so you
+   keep it. When a task fails, save the lesson learned.
+4. **Team management.** If a recurring pattern of work emerges, you can recruit
+   a specialist with `spawn_agent`. Be deliberate about names and roles.
+5. **Honesty about limits.** If a tool fails, say so. Don't fabricate results.
+6. **Concise output.** Lead with the answer. Keep tool-use commentary minimal.
+
+You are talking to your operator (the human who runs you). Be direct, capable, and proactive."#
+        .to_string()
 }
 
 #[cfg(test)]
@@ -443,26 +587,29 @@ mod tests {
 
     #[tokio::test]
     async fn orchestrator_creation() {
-        let claude = Arc::new(ClaudeClient::new(
-            "test-key".to_string(),
-            "claude-opus-4-7".to_string(),
-        ));
-        let orchestrator = Orchestrator::new(claude);
+        let llm: Arc<dyn LLMProvider> =
+            Arc::new(crate::llm::AnthropicProvider::new(
+                "test-key".to_string(),
+                "claude-opus-4-7".to_string(),
+            ));
+        let orchestrator = Orchestrator::new(llm);
         assert!(orchestrator.system_prompt().contains("Luna"));
-    }
-
-    #[test]
-    fn extract_json_object_pulls_out_inner_json() {
-        let s = r#"Here is the plan: {"steps":[{"agent":"X","description":"do"}]} and that's it."#;
-        let out = extract_json_object(s).unwrap();
-        assert!(out.contains("steps"));
-        let plan: Plan = serde_json::from_str(&out).unwrap();
-        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(orchestrator.provider_name(), "anthropic");
     }
 
     #[test]
     fn truncate_handles_short_strings() {
         assert_eq!(truncate("hi", 50), "hi");
         assert_eq!(truncate("abcdef", 3), "abc");
+    }
+
+    #[test]
+    fn usage_totals_accumulate() {
+        let mut u = UsageTotals::default();
+        u.add(100, 50);
+        u.add(200, 75);
+        assert_eq!(u.input_tokens, 300);
+        assert_eq!(u.output_tokens, 125);
+        assert_eq!(u.total(), 425);
     }
 }

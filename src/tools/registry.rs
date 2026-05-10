@@ -1,19 +1,84 @@
 //! Tool registry and built-in executors.
 //!
-//! The registry holds tool definitions (for advertising to Claude) plus an
-//! executor closure per tool. `execute()` dispatches a `ToolInput` to the
-//! matching executor and returns a `ToolResult`.
+//! Every tool implements [`ToolExecutor`] and is registered with a JSON-schema
+//! definition that gets advertised to the model. `execute()` dispatches a
+//! [`ToolInput`] to the matching executor and returns a [`ToolResult`].
+//!
+//! Built-in tool taxonomy (set via `with_built_in_tools()` or `with_full_toolkit()`):
+//!
+//! **File system:**
+//! - `read_file` — read a file as UTF-8 text
+//! - `write_file` — write/overwrite a file (creates parent dirs)
+//! - `list_directory` — list children of a directory
+//! - `grep_files` — recursive regex search (basic)
+//!
+//! **Execution:**
+//! - `run_shell` — run a PowerShell (Windows) or bash (Unix) command
+//! - `execute_code` — run inline python/node/bash snippets
+//!
+//! **Network:**
+//! - `web_search` — DuckDuckGo abstract API
+//! - `http_request` — generic HTTP client
+//!
+//! **Self-modification:**
+//! - `self_read_source` — read Forge's own source file
+//! - `self_edit_source` — overwrite Forge's own source file (Luna can patch herself)
+//! - `git_commit` — stage + commit current changes (so we can roll back)
+//!
+//! **Memory:**
+//! - `save_memory` — persist a knowledge nugget across sessions
+//! - `recall_memory` — search persisted memories by keyword
+//!
+//! **Team:**
+//! - `spawn_agent` — recruit a new dynamic agent
+//! - `rename_agent` — rename an existing dynamic agent
+//! - `list_agents` — list dynamic agents currently on the team
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use crate::errors::{Error, Result};
+use crate::memory::MemoryStore;
 use crate::models::{Tool, ToolInput, ToolResult};
+
+/// Permission tier for a tool.
+///
+/// - [`Tier::Auto`] — runs silently. Reads, search, list, memory ops, etc.
+/// - [`Tier::Confirm`] — destructive / external-effects. Logged with a warning;
+///   blocked entirely when [`PermissionMode::Strict`] is active.
+/// - [`Tier::Deny`] — never executes regardless of mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Tier {
+    Auto,
+    Confirm,
+    Deny,
+}
+
+/// Global enforcement mode.
+///
+/// - [`PermissionMode::Open`] — default. Auto + Confirm both execute (Confirm
+///   warns). Use this for trusted local development.
+/// - [`PermissionMode::Strict`] — only Auto-tier tools execute. Confirm and
+///   Deny are blocked. Use when Luna is exposed publicly or running unattended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionMode {
+    Open,
+    Strict,
+}
+
+impl PermissionMode {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "strict" | "deny" | "lock" => PermissionMode::Strict,
+            _ => PermissionMode::Open,
+        }
+    }
+}
 
 /// Async tool executor.
 #[async_trait]
@@ -35,10 +100,32 @@ where
     }
 }
 
+/// Tool executor with a captured `MemoryStore` for persistence-backed tools.
+struct MemoryToolExecutor<F> {
+    memory: Arc<MemoryStore>,
+    f: F,
+}
+
+#[async_trait]
+impl<F, Fut> ToolExecutor for MemoryToolExecutor<F>
+where
+    F: Fn(Arc<MemoryStore>, ToolInput) -> Fut + Send + Sync,
+    Fut: std::future::Future<Output = Result<Value>> + Send,
+{
+    async fn execute(&self, input: &ToolInput) -> Result<Value> {
+        (self.f)(self.memory.clone(), input.clone()).await
+    }
+}
+
 /// Registry of available tools and their executors.
 pub struct ToolRegistry {
     tools: HashMap<String, Tool>,
     executors: HashMap<String, Arc<dyn ToolExecutor>>,
+    tiers: HashMap<String, Tier>,
+    mode: PermissionMode,
+    /// User-overridable extra allow-list (tool names that should always run
+    /// regardless of mode).
+    always_allow: HashSet<String>,
 }
 
 impl ToolRegistry {
@@ -46,7 +133,27 @@ impl ToolRegistry {
         Self {
             tools: HashMap::new(),
             executors: HashMap::new(),
+            tiers: HashMap::new(),
+            mode: PermissionMode::Open,
+            always_allow: HashSet::new(),
         }
+    }
+
+    pub fn with_mode(mut self, mode: PermissionMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    pub fn mode(&self) -> PermissionMode {
+        self.mode
+    }
+
+    pub fn set_mode(&mut self, mode: PermissionMode) {
+        self.mode = mode;
+    }
+
+    pub fn allow_always(&mut self, name: impl Into<String>) {
+        self.always_allow.insert(name.into());
     }
 
     /// Register a tool definition only (no executor — useful for inspection).
@@ -54,10 +161,25 @@ impl ToolRegistry {
         self.tools.insert(tool.name.clone(), tool);
     }
 
-    /// Register a tool with its executor.
+    /// Register a tool with its executor at [`Tier::Auto`].
     pub fn register_with(&mut self, tool: Tool, executor: Arc<dyn ToolExecutor>) {
+        self.register_tiered(tool, executor, Tier::Auto);
+    }
+
+    /// Register a tool with its executor and a specific permission tier.
+    pub fn register_tiered(
+        &mut self,
+        tool: Tool,
+        executor: Arc<dyn ToolExecutor>,
+        tier: Tier,
+    ) {
+        self.tiers.insert(tool.name.clone(), tier);
         self.executors.insert(tool.name.clone(), executor);
         self.tools.insert(tool.name.clone(), tool);
+    }
+
+    pub fn tier(&self, name: &str) -> Tier {
+        self.tiers.get(name).copied().unwrap_or(Tier::Auto)
     }
 
     pub fn get(&self, name: &str) -> Option<&Tool> {
@@ -66,6 +188,12 @@ impl ToolRegistry {
 
     pub fn all(&self) -> Vec<&Tool> {
         self.tools.values().collect()
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.tools.keys().cloned().collect();
+        v.sort();
+        v
     }
 
     pub fn exists(&self, name: &str) -> bool {
@@ -77,7 +205,19 @@ impl ToolRegistry {
         self.tools.values().map(|t| t.to_claude_format()).collect()
     }
 
-    /// Execute a registered tool by name.
+    /// Decide whether a tool may run under the current mode.
+    fn permitted(&self, name: &str) -> bool {
+        if self.always_allow.contains(name) {
+            return true;
+        }
+        match self.tier(name) {
+            Tier::Auto => true,
+            Tier::Confirm => matches!(self.mode, PermissionMode::Open),
+            Tier::Deny => false,
+        }
+    }
+
+    /// Execute a registered tool by name. Honours [`PermissionMode`] and tiers.
     pub async fn execute(
         &self,
         tool_name: &str,
@@ -91,7 +231,30 @@ impl ToolRegistry {
             .ok_or_else(|| Error::ToolNotFound(tool_name.to_string()))?
             .clone();
 
-        info!(tool = tool_name, "Executing tool");
+        if !self.permitted(tool_name) {
+            let tier = self.tier(tool_name);
+            warn!(tool = tool_name, ?tier, mode = ?self.mode, "Permission denied");
+            return Ok(ToolResult::error(
+                tool_call_id,
+                tool_name.to_string(),
+                format!(
+                    "Permission denied: tool '{}' is tier {:?} but the registry mode is {:?}. \
+                     Ask the operator to relax the policy or to grant this tool with `--allow-tool {}`.",
+                    tool_name, tier, self.mode, tool_name
+                ),
+            ));
+        }
+
+        let tier = self.tier(tool_name);
+        if tier == Tier::Confirm {
+            warn!(
+                tool = tool_name,
+                "Executing CONFIRM-tier tool (no human confirmation plumbed in {:?} mode)",
+                self.mode
+            );
+        }
+
+        info!(tool = tool_name, ?tier, "Executing tool");
         match executor.execute(&input).await {
             Ok(output) => Ok(ToolResult::success(
                 tool_call_id,
@@ -109,34 +272,43 @@ impl ToolRegistry {
         }
     }
 
-    /// Build a registry pre-loaded with built-in tools (web_search, read_file,
-    /// write_file, execute_code, http_request).
+    /// Build a registry pre-loaded with the legacy 5 built-in tools.
+    /// Kept for tests / callers that don't have a MemoryStore.
     pub fn with_built_in_tools() -> Self {
         let mut r = Self::new();
+        Self::register_filesystem(&mut r);
+        Self::register_network(&mut r);
+        Self::register_execution(&mut r);
+        Self::register_self_edit(&mut r);
+        r
+    }
 
+    /// Build the **full** toolkit: filesystem + execution + network +
+    /// self-modification + memory + team management + skills + wallet.
+    /// This is what Luna gets at startup. Requires a [`MemoryStore`] for the
+    /// memory + team + skills tools.
+    pub fn with_full_toolkit(memory: Arc<MemoryStore>) -> Self {
+        let mut r = Self::with_built_in_tools();
+        Self::register_memory(&mut r, memory.clone());
+        Self::register_team(&mut r, memory.clone());
+        Self::register_skills(&mut r, memory);
+        Self::register_wallet(&mut r);
+        r
+    }
+
+    // ---- groups ----
+
+    fn register_filesystem(r: &mut Self) {
         r.register_with(
             Tool::new(
-                "web_search".to_string(),
-                "Search the web for a query and return summarized results.".to_string(),
+                "read_file".into(),
+                "Read a UTF-8 text file from disk and return its contents. \
+                 Path can be absolute or relative to Forge's working directory."
+                    .into(),
                 json!({
                     "type": "object",
                     "properties": {
-                        "query": { "type": "string", "description": "Search query." }
-                    },
-                    "required": ["query"]
-                }),
-            ),
-            Arc::new(FnExecutor(builtin::web_search)),
-        );
-
-        r.register_with(
-            Tool::new(
-                "read_file".to_string(),
-                "Read a file from disk and return its contents as UTF-8 text.".to_string(),
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "Absolute or relative file path." }
+                        "path": { "type": "string" }
                     },
                     "required": ["path"]
                 }),
@@ -144,10 +316,12 @@ impl ToolRegistry {
             Arc::new(FnExecutor(builtin::read_file)),
         );
 
-        r.register_with(
+        r.register_tiered(
             Tool::new(
-                "write_file".to_string(),
-                "Write UTF-8 text to a file (creates or overwrites).".to_string(),
+                "write_file".into(),
+                "Write UTF-8 text to a file (creates or overwrites). \
+                 Parent directories are created automatically."
+                    .into(),
                 json!({
                     "type": "object",
                     "properties": {
@@ -158,43 +332,374 @@ impl ToolRegistry {
                 }),
             ),
             Arc::new(FnExecutor(builtin::write_file)),
+            Tier::Confirm,
         );
 
         r.register_with(
             Tool::new(
-                "execute_code".to_string(),
-                "Execute a short snippet of code in a supported language (python, bash, node) and return stdout/stderr.".to_string(),
+                "list_directory".into(),
+                "List the entries in a directory. Returns name, kind (file/dir), and size."
+                    .into(),
                 json!({
                     "type": "object",
                     "properties": {
-                        "language": { "type": "string", "enum": ["python", "bash", "node"] },
-                        "code": { "type": "string" }
+                        "path": { "type": "string", "description": "Directory path." }
                     },
-                    "required": ["language", "code"]
+                    "required": ["path"]
                 }),
             ),
-            Arc::new(FnExecutor(builtin::execute_code)),
+            Arc::new(FnExecutor(builtin::list_directory)),
         );
 
         r.register_with(
             Tool::new(
-                "http_request".to_string(),
-                "Send an HTTP request and return status, headers, and body.".to_string(),
+                "grep_files".into(),
+                "Recursively search for a regex pattern in files under a path. \
+                 Returns matching lines with their file path and line number."
+                    .into(),
                 json!({
                     "type": "object",
                     "properties": {
-                        "method": { "type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"] },
+                        "path": { "type": "string" },
+                        "pattern": { "type": "string", "description": "Rust regex." },
+                        "max_matches": { "type": "integer", "description": "Cap on results, default 100." },
+                        "extensions": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Optional whitelist of file extensions, e.g. [\"rs\",\"ts\"]."
+                        }
+                    },
+                    "required": ["path", "pattern"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::grep_files)),
+        );
+    }
+
+    fn register_network(r: &mut Self) {
+        r.register_with(
+            Tool::new(
+                "web_search".into(),
+                "Search the web (DuckDuckGo abstract). Returns a short summary plus related links."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    },
+                    "required": ["query"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::web_search)),
+        );
+
+        r.register_with(
+            Tool::new(
+                "http_request".into(),
+                "Send an HTTP request and return status, headers, and body.".into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "method": { "type": "string", "enum": ["GET","POST","PUT","DELETE","PATCH"] },
                         "url": { "type": "string" },
                         "body": { "type": "string" },
                         "headers": { "type": "object" }
                     },
-                    "required": ["method", "url"]
+                    "required": ["method","url"]
                 }),
             ),
             Arc::new(FnExecutor(builtin::http_request)),
         );
+    }
 
-        r
+    fn register_execution(r: &mut Self) {
+        r.register_tiered(
+            Tool::new(
+                "run_shell".into(),
+                "Run a shell command in the OS shell (PowerShell on Windows, bash on Unix). \
+                 Returns stdout, stderr, and exit code. \
+                 Use this for: building (`cargo build`), git operations, file operations, etc."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "Full command line." },
+                        "cwd": { "type": "string", "description": "Optional working directory." },
+                        "timeout_secs": { "type": "integer", "description": "Default 60." }
+                    },
+                    "required": ["command"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::run_shell)),
+            Tier::Confirm,
+        );
+
+        r.register_tiered(
+            Tool::new(
+                "execute_code".into(),
+                "Execute a short snippet of code in python, bash, or node and return stdout/stderr."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "language": { "type": "string", "enum": ["python","bash","node"] },
+                        "code": { "type": "string" }
+                    },
+                    "required": ["language","code"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::execute_code)),
+            Tier::Confirm,
+        );
+    }
+
+    fn register_self_edit(r: &mut Self) {
+        r.register_with(
+            Tool::new(
+                "self_read_source".into(),
+                "Read one of Forge's own Rust source files. \
+                 Use this to inspect your own implementation. \
+                 The file path is relative to the Forge project root (e.g. \"src/main.rs\")."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Path relative to Forge root." }
+                    },
+                    "required": ["path"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::self_read_source)),
+        );
+
+        r.register_tiered(
+            Tool::new(
+                "self_edit_source".into(),
+                "Overwrite one of Forge's own Rust source files. \
+                 You can rewrite your own code. After editing you typically want to \
+                 `run_shell` `cargo build --release` to verify the change compiles, \
+                 then `git_commit` to snapshot it. \
+                 ⚠️ Breaking your own build will require human intervention to recover."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Path relative to Forge root." },
+                        "content": { "type": "string", "description": "Full new file contents." }
+                    },
+                    "required": ["path","content"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::self_edit_source)),
+            Tier::Confirm,
+        );
+
+        r.register_tiered(
+            Tool::new(
+                "git_commit".into(),
+                "Stage all current changes and create a git commit in the Forge repo. \
+                 Use this after self-editing so the change is recoverable."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "message": { "type": "string", "description": "Commit message." }
+                    },
+                    "required": ["message"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::git_commit)),
+            Tier::Confirm,
+        );
+    }
+
+    fn register_memory(r: &mut Self, memory: Arc<MemoryStore>) {
+        r.register_with(
+            Tool::new(
+                "save_memory".into(),
+                "Persist a piece of knowledge to long-term memory. \
+                 This memory survives across sessions and process restarts. \
+                 Use it for: facts about the user, lessons learned, preferences, \
+                 long-term goals, project context. \
+                 Tag the memory so you can find it later (e.g. \"user-preference\", \"project:forge\")."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "content": { "type": "string", "description": "The thing to remember." },
+                        "tag": { "type": "string", "description": "Short label for retrieval." },
+                        "importance": {
+                            "type": "integer",
+                            "description": "1-10 (10 = critical, never forget)."
+                        }
+                    },
+                    "required": ["content","tag"]
+                }),
+            ),
+            Arc::new(MemoryToolExecutor {
+                memory: memory.clone(),
+                f: builtin::save_memory,
+            }),
+        );
+
+        r.register_with(
+            Tool::new(
+                "recall_memory".into(),
+                "Search long-term memory by keyword. Returns matching memories \
+                 ranked by importance and recency. Use this whenever you might \
+                 already know something — e.g. before asking the user a question."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Keyword to search for." },
+                        "tag": { "type": "string", "description": "Optional exact tag filter." },
+                        "limit": { "type": "integer", "description": "Default 10." }
+                    },
+                    "required": ["query"]
+                }),
+            ),
+            Arc::new(MemoryToolExecutor {
+                memory,
+                f: builtin::recall_memory,
+            }),
+        );
+    }
+
+    fn register_team(r: &mut Self, memory: Arc<MemoryStore>) {
+        r.register_tiered(
+            Tool::new(
+                "spawn_agent".into(),
+                "Recruit a new specialist agent to your team. \
+                 Defines the agent's name, role, and system prompt. \
+                 The agent persists across restarts and can be invoked in future plans."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "role": { "type": "string", "description": "Short description of what they do." },
+                        "system_prompt": { "type": "string", "description": "Behavior + style instructions." }
+                    },
+                    "required": ["name","role","system_prompt"]
+                }),
+            ),
+            Arc::new(MemoryToolExecutor {
+                memory: memory.clone(),
+                f: builtin::spawn_agent,
+            }),
+            Tier::Confirm,
+        );
+
+        r.register_tiered(
+            Tool::new(
+                "rename_agent".into(),
+                "Rename an existing dynamic agent on the team.".into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "old_name": { "type": "string" },
+                        "new_name": { "type": "string" }
+                    },
+                    "required": ["old_name","new_name"]
+                }),
+            ),
+            Arc::new(MemoryToolExecutor {
+                memory: memory.clone(),
+                f: builtin::rename_agent,
+            }),
+            Tier::Confirm,
+        );
+
+        r.register_with(
+            Tool::new(
+                "list_agents".into(),
+                "List all specialist agents currently on the team (built-in and dynamic)."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            ),
+            Arc::new(MemoryToolExecutor {
+                memory,
+                f: builtin::list_agents,
+            }),
+        );
+    }
+
+    fn register_skills(r: &mut Self, memory: Arc<MemoryStore>) {
+        r.register_tiered(
+            Tool::new(
+                "save_skill".into(),
+                "Save a learned skill — a reusable recipe for accomplishing a recurring task. \
+                 Use this when you discover a multi-step pattern that worked. \
+                 Future you can find it via list_skills and follow the recipe."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Short skill name (snake_case preferred)." },
+                        "description": { "type": "string", "description": "What it does, when to use it." },
+                        "code": { "type": "string", "description": "Recipe — usually pseudocode or a step-by-step plan, not actual executable code." }
+                    },
+                    "required": ["name","description","code"]
+                }),
+            ),
+            Arc::new(MemoryToolExecutor {
+                memory: memory.clone(),
+                f: builtin::save_skill,
+            }),
+            Tier::Confirm,
+        );
+
+        r.register_with(
+            Tool::new(
+                "list_skills".into(),
+                "List all saved skills with their names and descriptions.".into(),
+                json!({"type": "object", "properties": {}}),
+            ),
+            Arc::new(MemoryToolExecutor {
+                memory,
+                f: builtin::list_skills,
+            }),
+        );
+    }
+
+    fn register_wallet(r: &mut Self) {
+        r.register_with(
+            Tool::new(
+                "sol_balance".into(),
+                "Get the SOL balance for a Solana public address (read-only via mainnet RPC). \
+                 No private key needed. Returns the balance in lamports and SOL."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "address": { "type": "string", "description": "Solana public key (base58)." }
+                    },
+                    "required": ["address"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::sol_balance)),
+        );
+
+        r.register_with(
+            Tool::new(
+                "crypto_price".into(),
+                "Get the current USD price of a crypto asset by symbol (BTC, ETH, SOL, USDC, ...). \
+                 Uses CoinGecko's free public API."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string", "description": "Ticker symbol, e.g. BTC, ETH, SOL." }
+                    },
+                    "required": ["symbol"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::crypto_price)),
+        );
     }
 }
 
@@ -206,6 +711,268 @@ impl Default for ToolRegistry {
 
 mod builtin {
     use super::*;
+    use std::path::{Path, PathBuf};
+
+    /// Find the Forge project root by walking up from CWD looking for Cargo.toml
+    /// with `name = "forge"`. Falls back to CWD if not found.
+    pub(super) fn forge_root() -> PathBuf {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mut here = cwd.clone();
+        loop {
+            let cargo = here.join("Cargo.toml");
+            if cargo.exists() {
+                if let Ok(text) = std::fs::read_to_string(&cargo) {
+                    if text.contains("name = \"forge\"") || text.contains("name=\"forge\"") {
+                        return here;
+                    }
+                }
+            }
+            if !here.pop() {
+                break;
+            }
+        }
+        cwd
+    }
+
+    pub async fn read_file(input: ToolInput) -> Result<Value> {
+        let path = input
+            .get_string("path")
+            .ok_or_else(|| Error::ToolExecution("missing 'path'".into()))?;
+        let content = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| Error::ToolExecution(format!("read {}: {}", path, e)))?;
+        Ok(json!({ "path": path, "bytes": content.len(), "content": content }))
+    }
+
+    pub async fn write_file(input: ToolInput) -> Result<Value> {
+        let path = input
+            .get_string("path")
+            .ok_or_else(|| Error::ToolExecution("missing 'path'".into()))?;
+        let content = input
+            .get_string("content")
+            .ok_or_else(|| Error::ToolExecution("missing 'content'".into()))?;
+        if let Some(parent) = Path::new(&path).parent() {
+            if !parent.as_os_str().is_empty() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| Error::ToolExecution(format!("mkdir: {}", e)))?;
+            }
+        }
+        tokio::fs::write(&path, &content)
+            .await
+            .map_err(|e| Error::ToolExecution(format!("write {}: {}", path, e)))?;
+        Ok(json!({ "path": path, "bytes_written": content.len() }))
+    }
+
+    pub async fn list_directory(input: ToolInput) -> Result<Value> {
+        let path = input
+            .get_string("path")
+            .ok_or_else(|| Error::ToolExecution("missing 'path'".into()))?;
+        let mut entries = tokio::fs::read_dir(&path)
+            .await
+            .map_err(|e| Error::ToolExecution(format!("readdir {}: {}", path, e)))?;
+        let mut out = Vec::new();
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("iter: {}", e)))?
+        {
+            let meta = entry.metadata().await.ok();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let (kind, size) = match meta {
+                Some(m) if m.is_dir() => ("dir", 0),
+                Some(m) => ("file", m.len()),
+                None => ("?", 0),
+            };
+            out.push(json!({"name": name, "kind": kind, "size": size}));
+        }
+        out.sort_by(|a, b| {
+            a["kind"]
+                .as_str()
+                .cmp(&b["kind"].as_str())
+                .then_with(|| a["name"].as_str().cmp(&b["name"].as_str()))
+        });
+        Ok(json!({ "path": path, "count": out.len(), "entries": out }))
+    }
+
+    pub async fn grep_files(input: ToolInput) -> Result<Value> {
+        let path = input
+            .get_string("path")
+            .ok_or_else(|| Error::ToolExecution("missing 'path'".into()))?;
+        let pattern = input
+            .get_string("pattern")
+            .ok_or_else(|| Error::ToolExecution("missing 'pattern'".into()))?;
+        let max_matches = input
+            .get_number("max_matches")
+            .map(|n| n as usize)
+            .unwrap_or(100);
+        let exts: Option<Vec<String>> = input.get_array("extensions").map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.trim_start_matches('.').to_string()))
+                .collect()
+        });
+
+        let re = regex::Regex::new(&pattern)
+            .map_err(|e| Error::ToolExecution(format!("bad regex: {}", e)))?;
+
+        let mut matches = Vec::new();
+        let mut stack = vec![PathBuf::from(&path)];
+        let skip_dirs = ["target", "node_modules", ".git", "dist", "build"];
+
+        while let Some(dir) = stack.pop() {
+            if matches.len() >= max_matches {
+                break;
+            }
+            let mut entries = match tokio::fs::read_dir(&dir).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            while let Some(entry) = entries.next_entry().await.unwrap_or(None) {
+                let p = entry.path();
+                let meta = match entry.metadata().await {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                if meta.is_dir() {
+                    let name = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if skip_dirs.contains(&name.as_str()) || name.starts_with('.') {
+                        continue;
+                    }
+                    stack.push(p);
+                    continue;
+                }
+                if meta.len() > 2_000_000 {
+                    continue;
+                }
+                if let Some(ref allowed) = exts {
+                    let ext = p
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if !allowed.iter().any(|a| a == &ext) {
+                        continue;
+                    }
+                }
+                let text = match tokio::fs::read_to_string(&p).await {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                for (lineno, line) in text.lines().enumerate() {
+                    if re.is_match(line) {
+                        matches.push(json!({
+                            "path": p.to_string_lossy(),
+                            "line": lineno + 1,
+                            "content": line.trim_end()
+                        }));
+                        if matches.len() >= max_matches {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(json!({
+            "pattern": pattern,
+            "path": path,
+            "match_count": matches.len(),
+            "matches": matches
+        }))
+    }
+
+    pub async fn run_shell(input: ToolInput) -> Result<Value> {
+        let command = input
+            .get_string("command")
+            .ok_or_else(|| Error::ToolExecution("missing 'command'".into()))?;
+        let cwd = input.get_string("cwd");
+        let timeout_secs = input
+            .get_number("timeout_secs")
+            .map(|n| n as u64)
+            .unwrap_or(60);
+
+        #[cfg(target_os = "windows")]
+        let (program, args) = (
+            "powershell",
+            vec![
+                "-NoProfile".to_string(),
+                "-NonInteractive".to_string(),
+                "-Command".to_string(),
+                command.clone(),
+            ],
+        );
+        #[cfg(not(target_os = "windows"))]
+        let (program, args) = ("bash", vec!["-lc".to_string(), command.clone()]);
+
+        let mut cmd = Command::new(program);
+        cmd.args(&args);
+        if let Some(d) = &cwd {
+            cmd.current_dir(d);
+        }
+
+        let fut = cmd.output();
+        let output = tokio::time::timeout(Duration::from_secs(timeout_secs), fut)
+            .await
+            .map_err(|_| {
+                Error::ToolExecution(format!("shell command timed out after {}s", timeout_secs))
+            })?
+            .map_err(|e| Error::ToolExecution(format!("spawn: {}", e)))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Ok(json!({
+            "command": command,
+            "cwd": cwd,
+            "exit_code": output.status.code(),
+            "stdout": truncate_for_llm(&stdout, 32_000),
+            "stderr": truncate_for_llm(&stderr, 16_000),
+        }))
+    }
+
+    pub async fn execute_code(input: ToolInput) -> Result<Value> {
+        let language = input
+            .get_string("language")
+            .ok_or_else(|| Error::ToolExecution("missing 'language'".into()))?;
+        let code = input
+            .get_string("code")
+            .ok_or_else(|| Error::ToolExecution("missing 'code'".into()))?;
+
+        let (program, args) = match language.as_str() {
+            "python" => ("python", vec!["-c".to_string(), code.clone()]),
+            "node" => ("node", vec!["-e".to_string(), code.clone()]),
+            "bash" | "sh" => {
+                #[cfg(target_os = "windows")]
+                {
+                    ("cmd", vec!["/C".to_string(), code.clone()])
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    ("bash", vec!["-c".to_string(), code.clone()])
+                }
+            }
+            other => {
+                return Err(Error::ToolExecution(format!(
+                    "unsupported language '{}'",
+                    other
+                )))
+            }
+        };
+
+        let output = Command::new(program)
+            .args(&args)
+            .output()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("spawn {}: {}", program, e)))?;
+
+        Ok(json!({
+            "language": language,
+            "exit_code": output.status.code(),
+            "stdout": truncate_for_llm(&String::from_utf8_lossy(&output.stdout), 16_000),
+            "stderr": truncate_for_llm(&String::from_utf8_lossy(&output.stderr), 8_000),
+        }))
+    }
 
     pub async fn web_search(input: ToolInput) -> Result<Value> {
         let query = input
@@ -257,82 +1024,6 @@ mod builtin {
         }))
     }
 
-    pub async fn read_file(input: ToolInput) -> Result<Value> {
-        let path = input
-            .get_string("path")
-            .ok_or_else(|| Error::ToolExecution("missing 'path'".into()))?;
-        let content = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|e| Error::ToolExecution(format!("read {}: {}", path, e)))?;
-        Ok(json!({ "path": path, "content": content }))
-    }
-
-    pub async fn write_file(input: ToolInput) -> Result<Value> {
-        let path = input
-            .get_string("path")
-            .ok_or_else(|| Error::ToolExecution("missing 'path'".into()))?;
-        let content = input
-            .get_string("content")
-            .ok_or_else(|| Error::ToolExecution("missing 'content'".into()))?;
-        if let Some(parent) = std::path::Path::new(&path).parent() {
-            if !parent.as_os_str().is_empty() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| Error::ToolExecution(format!("mkdir: {}", e)))?;
-            }
-        }
-        tokio::fs::write(&path, &content)
-            .await
-            .map_err(|e| Error::ToolExecution(format!("write {}: {}", path, e)))?;
-        Ok(json!({ "path": path, "bytes_written": content.len() }))
-    }
-
-    pub async fn execute_code(input: ToolInput) -> Result<Value> {
-        let language = input
-            .get_string("language")
-            .ok_or_else(|| Error::ToolExecution("missing 'language'".into()))?;
-        let code = input
-            .get_string("code")
-            .ok_or_else(|| Error::ToolExecution("missing 'code'".into()))?;
-
-        let (program, args) = match language.as_str() {
-            "python" => ("python", vec!["-c".to_string(), code.clone()]),
-            "node" => ("node", vec!["-e".to_string(), code.clone()]),
-            "bash" | "sh" => {
-                #[cfg(target_os = "windows")]
-                let prog = "cmd";
-                #[cfg(not(target_os = "windows"))]
-                let prog = "bash";
-
-                #[cfg(target_os = "windows")]
-                let args = vec!["/C".to_string(), code.clone()];
-                #[cfg(not(target_os = "windows"))]
-                let args = vec!["-c".to_string(), code.clone()];
-
-                (prog, args)
-            }
-            other => {
-                return Err(Error::ToolExecution(format!(
-                    "unsupported language '{}'",
-                    other
-                )))
-            }
-        };
-
-        let output = Command::new(program)
-            .args(&args)
-            .output()
-            .await
-            .map_err(|e| Error::ToolExecution(format!("spawn {}: {}", program, e)))?;
-
-        Ok(json!({
-            "language": language,
-            "exit_code": output.status.code(),
-            "stdout": String::from_utf8_lossy(&output.stdout),
-            "stderr": String::from_utf8_lossy(&output.stderr),
-        }))
-    }
-
     pub async fn http_request(input: ToolInput) -> Result<Value> {
         let method = input
             .get_string("method")
@@ -381,11 +1072,289 @@ mod builtin {
         Ok(json!({
             "status": status,
             "headers": response_headers,
-            "body": text,
+            "body": truncate_for_llm(&text, 32_000),
         }))
     }
 
-    fn urlencode(s: &str) -> String {
+    pub async fn self_read_source(input: ToolInput) -> Result<Value> {
+        let rel = input
+            .get_string("path")
+            .ok_or_else(|| Error::ToolExecution("missing 'path'".into()))?;
+        let root = forge_root();
+        let full = root.join(&rel);
+        if !full.starts_with(&root) {
+            return Err(Error::ToolExecution(
+                "path escapes Forge root, refused".into(),
+            ));
+        }
+        let content = tokio::fs::read_to_string(&full)
+            .await
+            .map_err(|e| Error::ToolExecution(format!("read {}: {}", full.display(), e)))?;
+        Ok(json!({
+            "path": rel,
+            "absolute": full.to_string_lossy(),
+            "bytes": content.len(),
+            "content": content
+        }))
+    }
+
+    pub async fn self_edit_source(input: ToolInput) -> Result<Value> {
+        let rel = input
+            .get_string("path")
+            .ok_or_else(|| Error::ToolExecution("missing 'path'".into()))?;
+        let content = input
+            .get_string("content")
+            .ok_or_else(|| Error::ToolExecution("missing 'content'".into()))?;
+        let root = forge_root();
+        let full = root.join(&rel);
+        if !full.starts_with(&root) {
+            return Err(Error::ToolExecution(
+                "path escapes Forge root, refused".into(),
+            ));
+        }
+        if let Some(parent) = full.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| Error::ToolExecution(format!("mkdir: {}", e)))?;
+        }
+        tokio::fs::write(&full, &content)
+            .await
+            .map_err(|e| Error::ToolExecution(format!("write: {}", e)))?;
+        Ok(json!({
+            "path": rel,
+            "absolute": full.to_string_lossy(),
+            "bytes_written": content.len(),
+            "note": "Source written. Run `cargo build --release` via run_shell to verify, then git_commit."
+        }))
+    }
+
+    pub async fn git_commit(input: ToolInput) -> Result<Value> {
+        let message = input
+            .get_string("message")
+            .ok_or_else(|| Error::ToolExecution("missing 'message'".into()))?;
+        let root = forge_root();
+        let root_str = root.to_string_lossy().to_string();
+
+        let stage = Command::new("git")
+            .args(["-C", &root_str, "add", "-A"])
+            .output()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("git add: {}", e)))?;
+        if !stage.status.success() {
+            return Err(Error::ToolExecution(format!(
+                "git add failed: {}",
+                String::from_utf8_lossy(&stage.stderr)
+            )));
+        }
+
+        let commit = Command::new("git")
+            .args(["-C", &root_str, "commit", "-m", &message])
+            .output()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("git commit: {}", e)))?;
+        let stdout = String::from_utf8_lossy(&commit.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&commit.stderr).to_string();
+        Ok(json!({
+            "exit_code": commit.status.code(),
+            "stdout": stdout,
+            "stderr": stderr,
+        }))
+    }
+
+    pub async fn save_memory(memory: Arc<MemoryStore>, input: ToolInput) -> Result<Value> {
+        let content = input
+            .get_string("content")
+            .ok_or_else(|| Error::ToolExecution("missing 'content'".into()))?;
+        let tag = input
+            .get_string("tag")
+            .ok_or_else(|| Error::ToolExecution("missing 'tag'".into()))?;
+        let importance = input
+            .get_number("importance")
+            .map(|n| n.clamp(1.0, 10.0) as i64)
+            .unwrap_or(5);
+        let id = memory.save_memory(&content, &tag, importance).await?;
+        Ok(json!({"id": id, "tag": tag, "importance": importance, "saved": true}))
+    }
+
+    pub async fn recall_memory(memory: Arc<MemoryStore>, input: ToolInput) -> Result<Value> {
+        let query = input
+            .get_string("query")
+            .ok_or_else(|| Error::ToolExecution("missing 'query'".into()))?;
+        let tag = input.get_string("tag");
+        let limit = input.get_number("limit").map(|n| n as i64).unwrap_or(10);
+        let memories = memory.recall_memories(&query, tag.as_deref(), limit).await?;
+        let total = memories.len();
+        Ok(json!({"query": query, "count": total, "memories": memories}))
+    }
+
+    pub async fn spawn_agent(memory: Arc<MemoryStore>, input: ToolInput) -> Result<Value> {
+        let name = input
+            .get_string("name")
+            .ok_or_else(|| Error::ToolExecution("missing 'name'".into()))?;
+        let role = input
+            .get_string("role")
+            .ok_or_else(|| Error::ToolExecution("missing 'role'".into()))?;
+        let system_prompt = input
+            .get_string("system_prompt")
+            .ok_or_else(|| Error::ToolExecution("missing 'system_prompt'".into()))?;
+        memory.upsert_dynamic_agent(&name, &role, &system_prompt).await?;
+        Ok(json!({
+            "name": name,
+            "role": role,
+            "spawned": true,
+            "note": "Agent saved. They will be available on next session start (or call list_agents)."
+        }))
+    }
+
+    pub async fn rename_agent(memory: Arc<MemoryStore>, input: ToolInput) -> Result<Value> {
+        let old_name = input
+            .get_string("old_name")
+            .ok_or_else(|| Error::ToolExecution("missing 'old_name'".into()))?;
+        let new_name = input
+            .get_string("new_name")
+            .ok_or_else(|| Error::ToolExecution("missing 'new_name'".into()))?;
+        let renamed = memory.rename_dynamic_agent(&old_name, &new_name).await?;
+        Ok(json!({"renamed": renamed, "from": old_name, "to": new_name}))
+    }
+
+    pub async fn list_agents(memory: Arc<MemoryStore>, _input: ToolInput) -> Result<Value> {
+        let agents = memory.list_dynamic_agents().await?;
+        Ok(json!({"count": agents.len(), "agents": agents}))
+    }
+
+    pub async fn save_skill(memory: Arc<MemoryStore>, input: ToolInput) -> Result<Value> {
+        let name = input
+            .get_string("name")
+            .ok_or_else(|| Error::ToolExecution("missing 'name'".into()))?;
+        let description = input
+            .get_string("description")
+            .ok_or_else(|| Error::ToolExecution("missing 'description'".into()))?;
+        let code = input
+            .get_string("code")
+            .ok_or_else(|| Error::ToolExecution("missing 'code'".into()))?;
+        let id = memory.save_skill(&name, &description, &code).await?;
+        Ok(json!({"id": id, "name": name, "saved": true}))
+    }
+
+    pub async fn list_skills(memory: Arc<MemoryStore>, _input: ToolInput) -> Result<Value> {
+        let skills = memory.list_skills().await?;
+        let summaries: Vec<Value> = skills
+            .iter()
+            .map(|s| {
+                json!({
+                    "name": s.name,
+                    "description": s.description,
+                    "success_count": s.success_count,
+                    "code": s.code,
+                })
+            })
+            .collect();
+        Ok(json!({"count": summaries.len(), "skills": summaries}))
+    }
+
+    pub async fn sol_balance(input: ToolInput) -> Result<Value> {
+        let address = input
+            .get_string("address")
+            .ok_or_else(|| Error::ToolExecution("missing 'address'".into()))?;
+        let url = "https://api.mainnet-beta.solana.com";
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getBalance",
+            "params": [address]
+        });
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
+        let resp = client
+            .post(url)
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("rpc: {}", e)))?;
+        let status = resp.status();
+        let json: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!(
+                "solana rpc {}: {}",
+                status, json
+            )));
+        }
+        let lamports = json
+            .pointer("/result/value")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let sol = lamports as f64 / 1_000_000_000.0;
+        Ok(json!({
+            "address": address,
+            "lamports": lamports,
+            "sol": sol,
+            "raw": json
+        }))
+    }
+
+    pub async fn crypto_price(input: ToolInput) -> Result<Value> {
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?;
+        let upper = symbol.to_ascii_uppercase();
+        let id: String = match upper.as_str() {
+            "BTC" => "bitcoin".into(),
+            "ETH" => "ethereum".into(),
+            "SOL" => "solana".into(),
+            "USDC" => "usd-coin".into(),
+            "USDT" => "tether".into(),
+            "BNB" => "binancecoin".into(),
+            "MATIC" => "matic-network".into(),
+            "AVAX" => "avalanche-2".into(),
+            "ARB" => "arbitrum".into(),
+            "OP" => "optimism".into(),
+            other => other.to_ascii_lowercase(),
+        };
+        let url = format!(
+            "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd&include_24hr_change=true",
+            urlencode(&id)
+        );
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
+        let status = resp.status();
+        let json: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!("coingecko {}: {}", status, json)));
+        }
+        let price = json
+            .get(&id)
+            .and_then(|v| v.get("usd"))
+            .and_then(|v| v.as_f64());
+        let change_24h = json
+            .get(&id)
+            .and_then(|v| v.get("usd_24h_change"))
+            .and_then(|v| v.as_f64());
+        Ok(json!({
+            "symbol": upper,
+            "id": id,
+            "usd": price,
+            "change_24h": change_24h,
+            "raw": json
+        }))
+    }
+
+    pub(super) fn urlencode(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
         for ch in s.chars() {
             if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '~') {
@@ -398,6 +1367,17 @@ mod builtin {
             }
         }
         out
+    }
+
+    pub(super) fn truncate_for_llm(s: &str, max: usize) -> String {
+        if s.len() <= max {
+            return s.to_string();
+        }
+        let mut end = max;
+        while !s.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        format!("{}\n... [truncated, original was {} bytes]", &s[..end], s.len())
     }
 }
 
@@ -422,11 +1402,7 @@ mod tests {
         );
 
         let res = reg
-            .execute(
-                "echo",
-                "call-1",
-                ToolInput::from_value(json!({"msg":"hi"})),
-            )
+            .execute("echo", "call-1", ToolInput::from_value(json!({"msg":"hi"})))
             .await
             .unwrap();
         assert!(res.success);
@@ -447,9 +1423,21 @@ mod tests {
     }
 
     #[test]
-    fn built_ins_register_all_five() {
+    fn legacy_built_ins_register_filesystem_and_more() {
         let reg = ToolRegistry::with_built_in_tools();
-        for name in ["web_search", "read_file", "write_file", "execute_code", "http_request"] {
+        for name in [
+            "read_file",
+            "write_file",
+            "list_directory",
+            "grep_files",
+            "web_search",
+            "http_request",
+            "run_shell",
+            "execute_code",
+            "self_read_source",
+            "self_edit_source",
+            "git_commit",
+        ] {
             assert!(reg.exists(name), "missing built-in: {}", name);
         }
     }

@@ -2,4 +2,4 @@
 
 pub mod registry;
 
-pub use registry::ToolRegistry;
+pub use registry::{PermissionMode, Tier, ToolRegistry};

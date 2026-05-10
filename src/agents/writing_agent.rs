@@ -119,11 +119,11 @@ When editing, return the improved text only — no meta-commentary unless explic
         )];
 
         let response = self
-            .claude
-            .message_from_history(self.system_prompt(), messages, None)
+            .llm
+            .generate(&self.system_prompt(), &messages, None)
             .await?;
 
-        Ok(ClaudeClient::extract_text(&response))
+        Ok(response.text)
     }
 
     fn can_handle(&self, task_description: &str) -> bool {

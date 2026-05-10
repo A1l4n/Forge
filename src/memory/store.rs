@@ -27,6 +27,64 @@ pub struct Skill {
     pub created_at: DateTime<Utc>,
 }
 
+/// Long-term knowledge nugget. Survives restarts and is searchable across
+/// sessions. Importance 1-10 controls retention bias.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Memory {
+    pub id: String,
+    pub content: String,
+    pub tag: String,
+    pub importance: i64,
+    pub access_count: i64,
+    pub created_at: DateTime<Utc>,
+    pub last_accessed: DateTime<Utc>,
+}
+
+/// A dynamic agent recruited at runtime by Luna (or the user). Persists across
+/// process restarts so the team grows over time.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DynamicAgentRow {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub system_prompt: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Lightweight session row for the dashboard.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionSummary {
+    pub id: String,
+    pub user_id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub message_count: u32,
+    pub task_count: u32,
+}
+
+/// Per-agent counters used by the mission control UI.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AgentStats {
+    pub agent_name: String,
+    pub total: u32,
+    pub completed: u32,
+    pub failed: u32,
+}
+
+/// Aggregate stats served at `/api/stats`.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct DashboardStats {
+    pub total_sessions: u32,
+    pub total_messages: u32,
+    pub total_tasks: u32,
+    pub completed_tasks: u32,
+    pub failed_tasks: u32,
+    pub running_tasks: u32,
+    pub pending_tasks: u32,
+    pub by_agent: Vec<AgentStats>,
+}
+
 /// Persistent state for sessions, messages, and tasks.
 #[derive(Clone)]
 pub struct MemoryStore {
@@ -153,6 +211,37 @@ impl MemoryStore {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS memories (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                tag TEXT NOT NULL,
+                importance INTEGER NOT NULL DEFAULT 5,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                last_accessed TEXT NOT NULL
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS dynamic_agents (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                role TEXT NOT NULL,
+                system_prompt TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);")
             .execute(&self.pool)
             .await?;
@@ -160,6 +249,12 @@ impl MemoryStore {
             .execute(&self.pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_tag ON memories(tag);")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance);")
             .execute(&self.pool)
             .await?;
 
@@ -367,6 +462,104 @@ impl MemoryStore {
         self.save_task(task).await
     }
 
+    /// Most recently created tasks across all sessions.
+    pub async fn list_recent_tasks(&self, limit: i64) -> Result<Vec<Task>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, session_id, parent_id, agent_name, description, status, result, error, metadata, created_at, updated_at, started_at, completed_at
+            FROM tasks
+            ORDER BY datetime(created_at) DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Self::tasks_from_rows(rows)
+    }
+
+    /// Most recently updated sessions, with a row count of their messages.
+    pub async fn list_recent_sessions(&self, limit: i64) -> Result<Vec<SessionSummary>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT s.id, s.user_id, s.created_at, s.updated_at,
+                   (SELECT COUNT(*) FROM messages WHERE session_id = s.id) AS message_count,
+                   (SELECT COUNT(*) FROM tasks WHERE session_id = s.id) AS task_count
+            FROM sessions s
+            ORDER BY datetime(s.updated_at) DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push(SessionSummary {
+                id: r.try_get("id")?,
+                user_id: r.try_get("user_id")?,
+                created_at: parse_dt(r.try_get("created_at")?)?,
+                updated_at: parse_dt(r.try_get("updated_at")?)?,
+                message_count: r.try_get::<i64, _>("message_count")? as u32,
+                task_count: r.try_get::<i64, _>("task_count")? as u32,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Aggregate stats for the mission-control dashboard.
+    pub async fn stats(&self) -> Result<DashboardStats> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+              (SELECT COUNT(*) FROM sessions) AS total_sessions,
+              (SELECT COUNT(*) FROM messages) AS total_messages,
+              (SELECT COUNT(*) FROM tasks) AS total_tasks,
+              (SELECT COUNT(*) FROM tasks WHERE status='completed') AS completed_tasks,
+              (SELECT COUNT(*) FROM tasks WHERE status='failed') AS failed_tasks,
+              (SELECT COUNT(*) FROM tasks WHERE status='running') AS running_tasks,
+              (SELECT COUNT(*) FROM tasks WHERE status='pending') AS pending_tasks
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let by_agent_rows = sqlx::query(
+            r#"
+            SELECT agent_name,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed,
+                   SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed
+            FROM tasks
+            GROUP BY agent_name
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut by_agent = Vec::new();
+        for r in by_agent_rows {
+            by_agent.push(AgentStats {
+                agent_name: r.try_get("agent_name")?,
+                total: r.try_get::<i64, _>("total")? as u32,
+                completed: r.try_get::<i64, _>("completed").unwrap_or(0) as u32,
+                failed: r.try_get::<i64, _>("failed").unwrap_or(0) as u32,
+            });
+        }
+
+        Ok(DashboardStats {
+            total_sessions: row.try_get::<i64, _>("total_sessions")? as u32,
+            total_messages: row.try_get::<i64, _>("total_messages")? as u32,
+            total_tasks: row.try_get::<i64, _>("total_tasks")? as u32,
+            completed_tasks: row.try_get::<i64, _>("completed_tasks")? as u32,
+            failed_tasks: row.try_get::<i64, _>("failed_tasks")? as u32,
+            running_tasks: row.try_get::<i64, _>("running_tasks")? as u32,
+            pending_tasks: row.try_get::<i64, _>("pending_tasks")? as u32,
+            by_agent,
+        })
+    }
+
     pub async fn get_session_tasks(&self, session_id: &str) -> Result<Vec<Task>> {
         let rows = sqlx::query(
             r#"
@@ -379,7 +572,10 @@ impl MemoryStore {
         .bind(session_id)
         .fetch_all(&self.pool)
         .await?;
+        Self::tasks_from_rows(rows)
+    }
 
+    fn tasks_from_rows(rows: Vec<sqlx::sqlite::SqliteRow>) -> Result<Vec<Task>> {
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
             let status_str: String = r.try_get("status")?;
@@ -452,6 +648,219 @@ impl MemoryStore {
             });
         }
         Ok(out)
+    }
+
+    // ---------- Long-term memories ----------
+
+    /// Persist a memory and return its id.
+    pub async fn save_memory(
+        &self,
+        content: &str,
+        tag: &str,
+        importance: i64,
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT INTO memories (id, content, tag, importance, access_count, created_at, last_accessed)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            "#,
+        )
+        .bind(&id)
+        .bind(content)
+        .bind(tag)
+        .bind(importance)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        debug!(memory_id = %id, tag = %tag, importance, "Memory saved");
+        Ok(id)
+    }
+
+    /// Search memories by content keyword + optional tag filter. Ranks by
+    /// importance desc then last_accessed desc. Updates access_count on hits.
+    pub async fn recall_memories(
+        &self,
+        query: &str,
+        tag: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<Memory>> {
+        let pattern = format!("%{}%", query);
+        let rows = if let Some(t) = tag {
+            sqlx::query(
+                r#"
+                SELECT id, content, tag, importance, access_count, created_at, last_accessed
+                FROM memories
+                WHERE (content LIKE ? OR tag LIKE ?) AND tag = ?
+                ORDER BY importance DESC, datetime(last_accessed) DESC
+                LIMIT ?
+                "#,
+            )
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(t)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT id, content, tag, importance, access_count, created_at, last_accessed
+                FROM memories
+                WHERE content LIKE ? OR tag LIKE ?
+                ORDER BY importance DESC, datetime(last_accessed) DESC
+                LIMIT ?
+                "#,
+            )
+            .bind(&pattern)
+            .bind(&pattern)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        let mut out = Vec::with_capacity(rows.len());
+        let mut hit_ids = Vec::new();
+        for r in rows {
+            let id: String = r.try_get("id")?;
+            hit_ids.push(id.clone());
+            out.push(Memory {
+                id,
+                content: r.try_get("content")?,
+                tag: r.try_get("tag")?,
+                importance: r.try_get("importance")?,
+                access_count: r.try_get("access_count")?,
+                created_at: parse_dt(r.try_get("created_at")?)?,
+                last_accessed: parse_dt(r.try_get("last_accessed")?)?,
+            });
+        }
+
+        // Touch access stats on every hit (best-effort; ignore individual failures).
+        let now = Utc::now().to_rfc3339();
+        for id in &hit_ids {
+            let _ = sqlx::query(
+                "UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?",
+            )
+            .bind(&now)
+            .bind(id)
+            .execute(&self.pool)
+            .await;
+        }
+
+        Ok(out)
+    }
+
+    /// Retrieve the top-N most important memories (used to inject context
+    /// at the start of a session).
+    pub async fn top_memories(&self, limit: i64) -> Result<Vec<Memory>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, content, tag, importance, access_count, created_at, last_accessed
+            FROM memories
+            ORDER BY importance DESC, datetime(last_accessed) DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push(Memory {
+                id: r.try_get("id")?,
+                content: r.try_get("content")?,
+                tag: r.try_get("tag")?,
+                importance: r.try_get("importance")?,
+                access_count: r.try_get("access_count")?,
+                created_at: parse_dt(r.try_get("created_at")?)?,
+                last_accessed: parse_dt(r.try_get("last_accessed")?)?,
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn delete_memory(&self, id: &str) -> Result<bool> {
+        let res = sqlx::query("DELETE FROM memories WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    // ---------- Dynamic agents ----------
+
+    /// Create or replace a dynamic agent.
+    pub async fn upsert_dynamic_agent(
+        &self,
+        name: &str,
+        role: &str,
+        system_prompt: &str,
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT INTO dynamic_agents (id, name, role, system_prompt, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                role=excluded.role,
+                system_prompt=excluded.system_prompt,
+                updated_at=excluded.updated_at
+            "#,
+        )
+        .bind(&id)
+        .bind(name)
+        .bind(role)
+        .bind(system_prompt)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    pub async fn list_dynamic_agents(&self) -> Result<Vec<DynamicAgentRow>> {
+        let rows = sqlx::query(
+            "SELECT id, name, role, system_prompt, created_at, updated_at FROM dynamic_agents ORDER BY name ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push(DynamicAgentRow {
+                id: r.try_get("id")?,
+                name: r.try_get("name")?,
+                role: r.try_get("role")?,
+                system_prompt: r.try_get("system_prompt")?,
+                created_at: parse_dt(r.try_get("created_at")?)?,
+                updated_at: parse_dt(r.try_get("updated_at")?)?,
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn rename_dynamic_agent(&self, old_name: &str, new_name: &str) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE dynamic_agents SET name = ?, updated_at = ? WHERE name = ?",
+        )
+        .bind(new_name)
+        .bind(Utc::now().to_rfc3339())
+        .bind(old_name)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    pub async fn delete_dynamic_agent(&self, name: &str) -> Result<bool> {
+        let res = sqlx::query("DELETE FROM dynamic_agents WHERE name = ?")
+            .bind(name)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
     }
 }
 

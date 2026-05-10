@@ -1,9 +1,14 @@
 //! LLM provider abstraction.
 //!
 //! Backends:
-//! - [`AnthropicProvider`] — Claude via the Anthropic API (`x-api-key`).
+//! - [`AnthropicProvider`] — Claude via the Anthropic API (`x-api-key` or OAuth).
 //! - [`OpenAICompatibleProvider`] — any OpenAI-compatible endpoint (Ollama,
-//!   OpenRouter, Groq, LM Studio, vLLM, Together, etc.).
+//!   OpenRouter, Groq, LM Studio, vLLM, Together, GLM, Mistral, Cerebras, ...).
+//!
+//! Two generation paths:
+//! - [`LLMProvider::generate`] — single-shot, plain text in/out.
+//! - [`LLMProvider::agentic_step`] — multi-turn with structured tool-use blocks.
+//!   Each provider serializes [`AgenticTurn`]s into its own native format.
 
 pub mod anthropic;
 pub mod openai_compatible;
@@ -45,6 +50,29 @@ pub struct ToolCallInfo {
     pub input: Value,
 }
 
+/// A tool result being fed back to the model.
+#[derive(Debug, Clone)]
+pub struct ToolResultEntry {
+    pub tool_use_id: String,
+    pub content: String,
+    pub is_error: bool,
+}
+
+/// One turn in an agentic conversation. Captures the structured shape needed
+/// for proper multi-turn tool use across providers.
+#[derive(Debug, Clone)]
+pub enum AgenticTurn {
+    /// User text message.
+    User(String),
+    /// Assistant response with optional text + tool calls.
+    Assistant {
+        text: String,
+        tool_calls: Vec<ToolCallInfo>,
+    },
+    /// Tool results being returned to the model.
+    ToolResults(Vec<ToolResultEntry>),
+}
+
 /// Token-usage info, when the provider returns it.
 #[derive(Debug, Clone, Default)]
 pub struct Usage {
@@ -71,13 +99,23 @@ impl LLMResponse {
 /// Trait every LLM backend implements.
 #[async_trait]
 pub trait LLMProvider: Send + Sync {
-    /// Generate a single response given a system prompt, conversation history,
+    /// Generate a single response given a system prompt, plain text history,
     /// and an optional tool list (in Claude's tool-format JSON).
+    /// For multi-turn tool use, prefer [`agentic_step`].
     async fn generate(
         &self,
         system: &str,
         messages: &[Message],
         tools: Option<&[Value]>,
+    ) -> Result<LLMResponse>;
+
+    /// Generate one assistant turn given a structured agentic conversation.
+    /// Each provider serializes the turns into its native message format.
+    async fn agentic_step(
+        &self,
+        system: &str,
+        turns: &[AgenticTurn],
+        tools: &[Value],
     ) -> Result<LLMResponse>;
 
     fn model(&self) -> &str;

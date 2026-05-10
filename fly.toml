@@ -1,0 +1,55 @@
+# Fly.io app config for Forge.
+#
+# Quick start (one-time, ~5 min):
+#   1. Install flyctl:   iwr https://fly.io/install.ps1 -useb | iex   (Windows)
+#                        curl -L https://fly.io/install.sh | sh        (mac/linux)
+#   2. flyctl auth signup     (free; takes a credit card but no charge on hobby plan)
+#   3. Edit this file: change `app = "forge-luna"` to a globally-unique name.
+#   4. flyctl launch --copy-config --no-deploy
+#      (picks org + region; reuses this fly.toml)
+#   5. flyctl volumes create forge_data --region iad --size 1
+#      (persistent /data — sqlite db survives restarts)
+#   6. SET YOUR SECRETS — both required:
+#        flyctl secrets set FORGE_AUTH_TOKEN=$(openssl rand -hex 24)
+#        flyctl secrets set GROQ_API_KEY=gsk_...
+#      (or CLAUDE_API_KEY, GLM_API_KEY, etc. for other backends)
+#      Save the FORGE_AUTH_TOKEN value somewhere — you type it once on
+#      first load and the browser remembers it.
+#   7. flyctl deploy
+#
+# Subsequent deploys: just `flyctl deploy`.
+# After deploy: `flyctl status` prints https://your-app.fly.dev — open it,
+# paste the FORGE_AUTH_TOKEN once, and you're in. The URL is publicly
+# routable but useless without the token.
+
+app = "forge-luna"      # change this — must be globally unique on fly.io
+primary_region = "iad"  # change to your nearest region: lax, ord, fra, syd, etc.
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  RUST_LOG = "info"
+  # Forge-specific env. Override the backend by editing this:
+  # FORGE_BACKEND = "groq"
+
+[[mounts]]
+  source = "forge_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0   # set to 1 to keep her always warm
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 50
+    hard_limit = 100
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  cpus = 1

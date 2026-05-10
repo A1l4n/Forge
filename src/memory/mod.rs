@@ -2,4 +2,6 @@
 
 pub mod store;
 
-pub use store::MemoryStore;
+pub use store::{
+    AgentStats, DashboardStats, DynamicAgentRow, Memory, MemoryStore, SessionSummary, Skill,
+};

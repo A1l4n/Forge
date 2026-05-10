@@ -1,25 +1,28 @@
-//! Forge - Agentic Operating System powered by Claude
+//! Forge - Agentic Operating System powered by Claude (and friends).
 //!
-//! This library provides the core orchestration engine for coordinating
-//! multiple specialist AI agents powered by Claude API.
+//! Multi-backend: works against the Anthropic API, Ollama (local), or any
+//! OpenAI-compatible endpoint (OpenRouter, Groq, LM Studio, vLLM, ...).
 
 // Module declarations
-pub mod claude;
+pub mod agents;
+pub mod claude;     // legacy Claude client kept for backward compat
 pub mod config;
 pub mod errors;
 pub mod gateway;
+pub mod llm;        // new multi-provider abstraction (preferred)
+pub mod logging;
 pub mod luna;
 pub mod memory;
 pub mod models;
 pub mod tools;
-pub mod agents;
 pub mod utils;
-pub mod logging;
+pub mod webui;
 
 // Re-exports for convenience
 pub use errors::{Error, Result};
+pub use llm::{LLMProvider, LLMResponse};
+pub use luna::orchestrator::{Orchestrator, OrchestrationResult, UsageTotals};
 pub use models::{Message, Task, TaskStatus};
-pub use luna::orchestrator::Orchestrator;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const APP_NAME: &str = "Forge";

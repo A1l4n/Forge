@@ -1,0 +1,1507 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Forge — Mission Control</title>
+<style>
+  :root {
+    --bg: #0a0d10;
+    --bg-elev: #12161b;
+    --bg-elev-2: #1a2028;
+    --bg-elev-3: #232a34;
+    --border: #2a3340;
+    --border-strong: #3a4555;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --text-faint: #6e7681;
+    --accent: #ff8c42;
+    --accent-2: #ffa765;
+    --accent-dim: #4a3520;
+    --user: #58a6ff;
+    --luna: #c9a3ff;
+    --agent: #7ee787;
+    --error: #f85149;
+    --warn: #f0a847;
+    --ok: #56d364;
+    --info: #79c0ff;
+    --shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ═══════════════ TOP BAR ═══════════════ */
+  header {
+    display: flex;
+    align-items: center;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--border);
+    padding: 0 16px;
+    gap: 16px;
+    height: 52px;
+    flex-shrink: 0;
+  }
+  .brand {
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 1px;
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .brand::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 6px var(--ok);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  nav.tabs {
+    display: flex;
+    gap: 2px;
+    background: var(--bg-elev-2);
+    padding: 3px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  nav.tabs button {
+    background: transparent;
+    color: var(--text-dim);
+    border: 0;
+    padding: 6px 14px;
+    border-radius: 5px;
+    font: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-weight: 500;
+    font-size: 13px;
+  }
+  nav.tabs button:hover { color: var(--text); }
+  nav.tabs button.active {
+    background: var(--accent);
+    color: #000;
+  }
+  .meta {
+    margin-left: auto;
+    display: flex;
+    gap: 18px;
+    color: var(--text-dim);
+    font-size: 12px;
+    align-items: center;
+  }
+  .meta-item { display: flex; align-items: center; gap: 6px; }
+  .meta-item b { color: var(--text); font-weight: 500; }
+  .gauge {
+    width: 80px;
+    height: 4px;
+    background: var(--bg-elev-2);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .gauge-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--ok), var(--warn), var(--error));
+    transition: width 0.3s;
+  }
+
+  /* ═══════════════ APP LAYOUT ═══════════════ */
+  main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+  aside {
+    width: 220px;
+    background: var(--bg-elev);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 14px 12px;
+    flex-shrink: 0;
+  }
+  aside h3 {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    letter-spacing: 1.5px;
+    margin: 14px 4px 8px;
+    font-weight: 700;
+  }
+  aside h3:first-child { margin-top: 0; }
+  .agent-card {
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    background: var(--bg-elev-2);
+    transition: all 0.15s;
+    cursor: default;
+  }
+  .agent-card:hover {
+    border-color: var(--accent);
+    transform: translateX(2px);
+  }
+  .agent-card .name {
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .agent-card .name::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ok);
+  }
+  .agent-card.busy .name::before {
+    background: var(--warn);
+    animation: pulse 1s infinite;
+  }
+  .agent-card .role {
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-top: 3px;
+  }
+  .session-actions {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .btn {
+    background: var(--bg-elev-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    font-size: 12px;
+    transition: all 0.15s;
+  }
+  .btn:hover {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--text);
+  }
+  .btn.primary {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+    font-weight: 600;
+    text-align: center;
+  }
+  .btn.primary:hover { background: var(--accent-2); }
+
+  .view {
+    flex: 1;
+    display: none;
+    overflow: hidden;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .view.active { display: flex; }
+
+  /* ═══════════════ CHAT VIEW ═══════════════ */
+  #view-chat { flex-direction: row; }
+  .chat-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  #chat {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    scroll-behavior: smooth;
+  }
+  .msg {
+    max-width: 800px;
+    margin: 0 auto 16px;
+    display: flex;
+    gap: 12px;
+    animation: fadeIn 0.2s ease-out;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .msg .who {
+    width: 56px;
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-top: 4px;
+  }
+  .msg.user .who { color: var(--user); }
+  .msg.luna .who { color: var(--luna); }
+  .msg.agent .who { color: var(--agent); }
+  .msg.error .who { color: var(--error); }
+  .msg .body {
+    flex: 1;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+    font-size: 14px;
+  }
+  .msg .body pre {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 10px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font: 12px/1.5 "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+    margin: 8px 0;
+  }
+  .msg .body code:not(pre code) {
+    background: var(--bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+  }
+  .composer {
+    border-top: 1px solid var(--border);
+    background: var(--bg-elev);
+    padding: 12px 16px;
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+  .composer textarea {
+    flex: 1;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font: inherit;
+    resize: none;
+    min-height: 40px;
+    max-height: 200px;
+    outline: none;
+  }
+  .composer textarea:focus { border-color: var(--accent); }
+  .composer button {
+    background: var(--accent);
+    color: #000;
+    border: 0;
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+    font-size: 13px;
+  }
+  .composer button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .composer button:not(:disabled):hover { opacity: 0.9; }
+  .activity-panel {
+    width: 300px;
+    background: var(--bg-elev);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 14px 12px;
+    flex-shrink: 0;
+  }
+  .activity-row {
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    background: var(--bg-elev-2);
+    font-size: 12px;
+  }
+  .activity-row .header-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    align-items: center;
+  }
+  .activity-row .agent-name { color: var(--agent); font-weight: 600; }
+  .activity-row .duration { color: var(--text-dim); font-size: 11px; }
+  .badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .badge.completed { background: #1f4d2c; color: var(--ok); }
+  .badge.failed { background: #4a1d1d; color: var(--error); }
+  .badge.running { background: #1d3a4a; color: var(--info); animation: pulse 1.5s infinite; }
+  .badge.pending { background: #2a2a2a; color: var(--text-dim); }
+  .badge.skipped { background: #2a2a2a; color: var(--text-faint); }
+  .activity-row .preview {
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-top: 6px;
+    max-height: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.4;
+  }
+  .empty {
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 40px;
+    font-size: 13px;
+  }
+  .typing { display: inline-flex; gap: 3px; padding: 6px 0; }
+  .typing span {
+    width: 6px; height: 6px;
+    background: var(--text-dim);
+    border-radius: 50%;
+    animation: bounce 1.2s infinite;
+  }
+  .typing span:nth-child(2) { animation-delay: 0.15s; }
+  .typing span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-4px); opacity: 1; }
+  }
+
+  /* ═══════════════ KANBAN VIEW ═══════════════ */
+  #view-kanban {
+    padding: 16px;
+    overflow: hidden;
+  }
+  .kanban-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    flex-shrink: 0;
+  }
+  .kanban-header h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .kanban-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .kanban-controls select, .kanban-controls .btn {
+    background: var(--bg-elev-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    border-radius: 5px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .kanban-board {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .kanban-col {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .kanban-col-header {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg-elev-2);
+  }
+  .kanban-col-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 700;
+  }
+  .kanban-col[data-status="pending"] .kanban-col-title { color: var(--text-dim); }
+  .kanban-col[data-status="running"] .kanban-col-title { color: var(--info); }
+  .kanban-col[data-status="completed"] .kanban-col-title { color: var(--ok); }
+  .kanban-col[data-status="failed"] .kanban-col-title { color: var(--error); }
+  .kanban-col-count {
+    background: var(--bg-elev-3);
+    color: var(--text-dim);
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .kanban-col-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .kanban-card {
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--text-dim);
+    border-radius: 5px;
+    padding: 10px;
+    transition: all 0.15s;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .kanban-card:hover {
+    border-color: var(--accent);
+    border-left-color: var(--accent);
+    background: var(--bg-elev-3);
+  }
+  .kanban-card[data-status="running"] { border-left-color: var(--info); }
+  .kanban-card[data-status="completed"] { border-left-color: var(--ok); }
+  .kanban-card[data-status="failed"] { border-left-color: var(--error); }
+  .kanban-card .agent {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--agent);
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .kanban-card .desc {
+    color: var(--text);
+    margin-bottom: 6px;
+    line-height: 1.4;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+  }
+  .kanban-card .meta {
+    color: var(--text-faint);
+    font-size: 10px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  /* ═══════════════ MISSION CONTROL VIEW ═══════════════ */
+  #view-mission {
+    padding: 16px;
+    overflow-y: auto;
+  }
+  .mc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  .mc-header h2 { margin: 0; font-size: 18px; font-weight: 600; }
+  .mc-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .kpi {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    position: relative;
+    overflow: hidden;
+  }
+  .kpi::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent);
+    opacity: 0.7;
+  }
+  .kpi.green::before { background: var(--ok); }
+  .kpi.red::before { background: var(--error); }
+  .kpi.blue::before { background: var(--info); }
+  .kpi.purple::before { background: var(--luna); }
+  .kpi-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    letter-spacing: 1.5px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .kpi-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+  }
+  .kpi-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 6px;
+  }
+  .mc-section {
+    margin-bottom: 20px;
+  }
+  .mc-section h3 {
+    font-size: 12px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+    margin: 0 0 10px;
+    font-weight: 700;
+  }
+  .agent-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+  }
+  .agent-tile {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .agent-tile .a-name {
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 13px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+  .agent-tile .a-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .agent-tile .a-stat {
+    text-align: center;
+    padding: 6px;
+    background: var(--bg-elev-2);
+    border-radius: 4px;
+  }
+  .agent-tile .a-stat-num { font-size: 18px; font-weight: 700; color: var(--text); }
+  .agent-tile .a-stat-lbl {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-faint);
+    margin-top: 2px;
+  }
+  .agent-tile .a-stat.ok .a-stat-num { color: var(--ok); }
+  .agent-tile .a-stat.err .a-stat-num { color: var(--error); }
+  .session-list {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .session-row {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 100px 1fr auto auto;
+    gap: 12px;
+    align-items: center;
+    font-size: 12px;
+    transition: background 0.15s;
+    cursor: pointer;
+  }
+  .session-row:last-child { border-bottom: 0; }
+  .session-row:hover { background: var(--bg-elev-2); }
+  .session-row .sid {
+    font-family: monospace;
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+  .session-row .stamp { color: var(--text-faint); font-size: 11px; }
+  .session-row .counts {
+    color: var(--text-dim);
+    font-size: 11px;
+    display: flex;
+    gap: 10px;
+  }
+  .session-row .counts b { color: var(--text); font-weight: 600; }
+  .footer {
+    color: var(--text-faint);
+    font-size: 11px;
+    text-align: center;
+    margin-top: 24px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ═══════════════ LOGIN OVERLAY ═══════════════ */
+  #login-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    padding: 20px;
+  }
+  #login-overlay.show { display: flex; }
+  #login-card {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 24px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: var(--shadow);
+  }
+  #login-card h1 {
+    margin: 0 0 6px;
+    color: var(--accent);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 1px;
+  }
+  #login-card p {
+    margin: 0 0 18px;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  #login-card input {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 11px 13px;
+    font: inherit;
+    font-size: 14px;
+    margin-bottom: 12px;
+    outline: none;
+  }
+  #login-card input:focus { border-color: var(--accent); }
+  #login-card button {
+    width: 100%;
+    background: var(--accent);
+    color: #000;
+    border: 0;
+    border-radius: 6px;
+    padding: 11px 13px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  #login-card button:hover { background: var(--accent-2); }
+  #login-error {
+    color: var(--error);
+    font-size: 12px;
+    margin-bottom: 10px;
+    display: none;
+  }
+  #login-error.show { display: block; }
+
+  /* ═══════════════ VOICE CONTROLS ═══════════════ */
+  .voice-btn {
+    background: var(--bg-elev-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 42px;
+    user-select: none;
+  }
+  .voice-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .voice-btn.recording {
+    background: var(--error);
+    color: #fff;
+    border-color: var(--error);
+    animation: pulse 1s infinite;
+  }
+  .voice-btn.tts-on { color: var(--accent); border-color: var(--accent); }
+  .voice-btn.disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ═══════════════ RESPONSIVE / MOBILE ═══════════════ */
+  @media (max-width: 900px) {
+    aside { display: none; }
+    .activity-panel { display: none; }
+    .meta { gap: 10px; font-size: 11px; }
+    .meta-item:nth-child(2),
+    .meta-item:nth-child(4) { display: none; }
+    nav.tabs button { padding: 6px 10px; font-size: 12px; }
+    .brand { font-size: 13px; }
+  }
+  @media (max-width: 600px) {
+    header { padding: 0 10px; gap: 8px; height: 48px; }
+    .meta { gap: 6px; font-size: 10px; }
+    .meta-item:nth-child(3) { display: none; }
+    nav.tabs button { padding: 5px 7px; font-size: 11px; }
+    .brand::before { display: none; }
+    #chat { padding: 12px; }
+    .composer { padding: 8px 10px; gap: 6px; }
+    .composer button { padding: 10px 12px; font-size: 12px; }
+    .kanban-board { grid-template-columns: 1fr 1fr; }
+    #view-kanban { padding: 10px; }
+    #view-mission { padding: 10px; }
+    .mc-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- ═══════════════ LOGIN OVERLAY ═══════════════ -->
+  <div id="login-overlay">
+    <form id="login-card" onsubmit="submitLogin(event)">
+      <h1>⚒ FORGE</h1>
+      <p>Enter your access token. This is the value you set in <code>FORGE_AUTH_TOKEN</code> on the server (or <code>flyctl secrets set FORGE_AUTH_TOKEN=...</code>).</p>
+      <div id="login-error">Wrong token — try again.</div>
+      <input id="login-token" type="password" placeholder="Access token" autocomplete="current-password" autofocus>
+      <button type="submit">Unlock</button>
+    </form>
+  </div>
+
+  <!-- ═══════════════ HEADER ═══════════════ -->
+  <header>
+    <div class="brand">⚒ FORGE</div>
+    <nav class="tabs">
+      <button class="active" data-tab="chat">💬 Chat</button>
+      <button data-tab="kanban">📋 Kanban</button>
+      <button data-tab="mission">🛰 Mission Control</button>
+    </nav>
+    <div class="meta">
+      <div class="meta-item">Provider: <b id="m-provider">…</b></div>
+      <div class="meta-item">Model: <b id="m-model">…</b></div>
+      <div class="meta-item">
+        Tokens: <b id="m-tokens">0</b>
+        <div class="gauge"><div class="gauge-fill" id="m-gauge" style="width:0%"></div></div>
+      </div>
+      <div class="meta-item">Session: <b id="m-session">…</b></div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ═══════════════ SIDEBAR ═══════════════ -->
+    <aside>
+      <h3>Specialists</h3>
+      <div id="agent-list"></div>
+      <h3>Session</h3>
+      <div class="session-actions">
+        <button class="btn primary" onclick="newSession()">+ New session</button>
+        <button class="btn" onclick="loadHistory()">↻ Reload chat</button>
+        <button class="btn" onclick="refreshAll()">↻ Refresh boards</button>
+      </div>
+    </aside>
+
+    <!-- ═══════════════ CHAT VIEW ═══════════════ -->
+    <section class="view active" id="view-chat">
+      <div class="chat-main">
+        <div id="chat">
+          <div class="empty">Type a message below to talk to Luna.</div>
+        </div>
+        <form class="composer" onsubmit="send(event)">
+          <button type="button" class="voice-btn" id="mic-btn" title="Hold to dictate (or tap to toggle)" onclick="toggleMic()">🎤</button>
+          <button type="button" class="voice-btn" id="tts-btn" title="Speak Luna's replies aloud" onclick="toggleTTS()">🔇</button>
+          <textarea id="input" placeholder="Ask Luna anything…  (Shift+Enter for newline)" rows="1"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send(event);}"></textarea>
+          <button id="send-btn" type="submit">Send</button>
+        </form>
+      </div>
+      <div class="activity-panel">
+        <h3 style="font-size:10px;text-transform:uppercase;color:var(--text-faint);letter-spacing:1.5px;margin:4px 4px 8px;font-weight:700;">
+          Live Activity
+        </h3>
+        <div id="activity-list">
+          <div class="empty" style="font-size:12px;margin-top:20px;">No activity yet.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════ KANBAN VIEW ═══════════════ -->
+    <section class="view" id="view-kanban">
+      <div class="kanban-header">
+        <h2>Task Board</h2>
+        <div class="kanban-controls">
+          <select id="kb-scope">
+            <option value="session">Current session</option>
+            <option value="all">All sessions</option>
+          </select>
+          <button class="btn" onclick="refreshKanban()">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="kanban-board">
+        <div class="kanban-col" data-status="pending">
+          <div class="kanban-col-header">
+            <span class="kanban-col-title">Pending</span>
+            <span class="kanban-col-count" id="kb-c-pending">0</span>
+          </div>
+          <div class="kanban-col-body" id="kb-pending"></div>
+        </div>
+        <div class="kanban-col" data-status="running">
+          <div class="kanban-col-header">
+            <span class="kanban-col-title">Running</span>
+            <span class="kanban-col-count" id="kb-c-running">0</span>
+          </div>
+          <div class="kanban-col-body" id="kb-running"></div>
+        </div>
+        <div class="kanban-col" data-status="completed">
+          <div class="kanban-col-header">
+            <span class="kanban-col-title">Completed</span>
+            <span class="kanban-col-count" id="kb-c-completed">0</span>
+          </div>
+          <div class="kanban-col-body" id="kb-completed"></div>
+        </div>
+        <div class="kanban-col" data-status="failed">
+          <div class="kanban-col-header">
+            <span class="kanban-col-title">Failed</span>
+            <span class="kanban-col-count" id="kb-c-failed">0</span>
+          </div>
+          <div class="kanban-col-body" id="kb-failed"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════ MISSION CONTROL VIEW ═══════════════ -->
+    <section class="view" id="view-mission">
+      <div class="mc-header">
+        <h2>Mission Control</h2>
+        <button class="btn" onclick="refreshMission()">↻ Refresh</button>
+      </div>
+
+      <!-- KPI tiles -->
+      <div class="mc-grid">
+        <div class="kpi">
+          <div class="kpi-label">Total Tasks</div>
+          <div class="kpi-value" id="kpi-total">—</div>
+          <div class="kpi-sub" id="kpi-total-sub">all-time</div>
+        </div>
+        <div class="kpi green">
+          <div class="kpi-label">Completed</div>
+          <div class="kpi-value" id="kpi-done">—</div>
+          <div class="kpi-sub" id="kpi-done-sub">—</div>
+        </div>
+        <div class="kpi red">
+          <div class="kpi-label">Failed</div>
+          <div class="kpi-value" id="kpi-failed">—</div>
+          <div class="kpi-sub" id="kpi-failed-sub">—</div>
+        </div>
+        <div class="kpi blue">
+          <div class="kpi-label">Running</div>
+          <div class="kpi-value" id="kpi-running">—</div>
+          <div class="kpi-sub">in flight now</div>
+        </div>
+        <div class="kpi purple">
+          <div class="kpi-label">Sessions</div>
+          <div class="kpi-value" id="kpi-sessions">—</div>
+          <div class="kpi-sub" id="kpi-sessions-sub">—</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-label">Tokens In / Out</div>
+          <div class="kpi-value" id="kpi-tokens">— / —</div>
+          <div class="kpi-sub">since startup</div>
+        </div>
+      </div>
+
+      <!-- Per-agent grid -->
+      <div class="mc-section">
+        <h3>Agent Performance</h3>
+        <div class="agent-grid" id="agent-grid"></div>
+      </div>
+
+      <!-- Recent sessions -->
+      <div class="mc-section">
+        <h3>Recent Sessions</h3>
+        <div class="session-list" id="session-list">
+          <div class="empty" style="padding:20px;">No sessions yet.</div>
+        </div>
+      </div>
+
+      <div class="footer">
+        Forge <span id="m-version">v?</span> · Powered by Claude / Ollama / OpenAI-compatible models
+      </div>
+    </section>
+  </main>
+
+<script>
+const API = location.origin;
+let sessionId = localStorage.getItem('forge_session') || crypto.randomUUID();
+localStorage.setItem('forge_session', sessionId);
+document.getElementById('m-session').textContent = sessionId.slice(0, 8);
+
+let currentTab = 'chat';
+let lastStats = null;
+let authToken = localStorage.getItem('forge_auth_token') || '';
+
+// ═══════════════ AUTH ═══════════════
+// Wrap fetch so every request includes the auth token (when set) and
+// auto-shows the login overlay on 401.
+const _origFetch = window.fetch.bind(window);
+async function authedFetch(input, init = {}) {
+  init = init || {};
+  init.headers = new Headers(init.headers || {});
+  if (authToken) init.headers.set('X-Forge-Token', authToken);
+  const r = await _origFetch(input, init);
+  if (r.status === 401) {
+    showLogin('Session expired or invalid token.');
+    throw new Error('unauthorized');
+  }
+  return r;
+}
+// Override `fetch` for everything else in this script.
+window.fetch = authedFetch;
+
+function showLogin(msg) {
+  const overlay = document.getElementById('login-overlay');
+  const err = document.getElementById('login-error');
+  if (msg) {
+    err.textContent = msg;
+    err.classList.add('show');
+  } else {
+    err.classList.remove('show');
+  }
+  overlay.classList.add('show');
+  document.getElementById('login-token').focus();
+}
+function hideLogin() {
+  document.getElementById('login-overlay').classList.remove('show');
+}
+async function submitLogin(e) {
+  e.preventDefault();
+  const t = document.getElementById('login-token').value.trim();
+  if (!t) return;
+  authToken = t;
+  // Validate by hitting auth/check.
+  try {
+    const r = await _origFetch(API + '/api/auth/check', {
+      headers: { 'X-Forge-Token': t },
+    });
+    const j = await r.json();
+    if (j.valid) {
+      localStorage.setItem('forge_auth_token', t);
+      hideLogin();
+      // Boot.
+      loadStatus();
+      loadHistory();
+    } else {
+      showLogin('That token did not work.');
+    }
+  } catch (err) {
+    showLogin('Network error: ' + err.message);
+  }
+}
+async function checkAuthThenBoot() {
+  try {
+    const r = await _origFetch(API + '/api/auth/check', {
+      headers: authToken ? { 'X-Forge-Token': authToken } : {},
+    });
+    const j = await r.json();
+    if (j.required && !j.valid) {
+      showLogin('');
+    } else {
+      hideLogin();
+      loadStatus();
+      loadHistory();
+    }
+  } catch (err) {
+    showLogin('Cannot reach server: ' + err.message);
+  }
+}
+
+// ═══════════════ TAB SWITCHING ═══════════════
+document.querySelectorAll('nav.tabs button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === `view-${tab}`));
+    currentTab = tab;
+    if (tab === 'kanban') refreshKanban();
+    if (tab === 'mission') refreshMission();
+  });
+});
+
+// ═══════════════ HELPERS ═══════════════
+function escape(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function renderMarkdown(text) {
+  let out = escape(text);
+  out = out.replace(/```([a-zA-Z0-9_+\-]*)\n([\s\S]*?)```/g, (_, lang, code) =>
+    `<pre data-lang="${lang}">${code}</pre>`);
+  out = out.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/\n\n/g, '<br><br>');
+  out = out.replace(/\n/g, '<br>');
+  return out;
+}
+function relTime(iso) {
+  const t = new Date(iso).getTime();
+  const diff = Date.now() - t;
+  if (diff < 60000) return Math.floor(diff/1000) + 's ago';
+  if (diff < 3600000) return Math.floor(diff/60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
+  return Math.floor(diff/86400000) + 'd ago';
+}
+
+// ═══════════════ STATUS / META ═══════════════
+async function loadStatus() {
+  try {
+    const r = await fetch(`${API}/api/status`);
+    const j = await r.json();
+    document.getElementById('m-provider').textContent = j.provider || 'unknown';
+    document.getElementById('m-model').textContent = j.model;
+    document.getElementById('m-version').textContent = 'v' + j.version;
+    const list = document.getElementById('agent-list');
+    list.innerHTML = '';
+    j.agents.forEach(a => {
+      const card = document.createElement('div');
+      card.className = 'agent-card';
+      card.dataset.agent = a.name;
+      card.innerHTML = `<div class="name">${escape(a.name)}</div><div class="role">${escape(a.role)}</div>`;
+      list.appendChild(card);
+    });
+    updateTokenGauge(j.usage);
+  } catch (e) { console.error('status error', e); }
+}
+function updateTokenGauge(usage) {
+  if (!usage) return;
+  const total = (usage.input_tokens || 0) + (usage.output_tokens || 0);
+  document.getElementById('m-tokens').textContent = total.toLocaleString();
+  const pct = Math.min(100, (total / 100000) * 100);
+  document.getElementById('m-gauge').style.width = pct + '%';
+}
+
+// ═══════════════ CHAT ═══════════════
+async function loadHistory() {
+  try {
+    const r = await fetch(`${API}/api/history/${sessionId}`);
+    const j = await r.json();
+    const chat = document.getElementById('chat');
+    chat.innerHTML = '';
+    if (!j.messages || !j.messages.length) {
+      chat.innerHTML = '<div class="empty">No messages in this session yet.</div>';
+      return;
+    }
+    j.messages.forEach(m => addMessage(m.role, m.content, m.agent_name));
+  } catch (e) { console.error('history error', e); }
+}
+function newSession() {
+  sessionId = crypto.randomUUID();
+  localStorage.setItem('forge_session', sessionId);
+  document.getElementById('m-session').textContent = sessionId.slice(0, 8);
+  document.getElementById('chat').innerHTML = '<div class="empty">New session started.</div>';
+  document.getElementById('activity-list').innerHTML =
+    '<div class="empty" style="font-size:12px;margin-top:20px;">No activity yet.</div>';
+}
+function addMessage(role, content, agentName) {
+  const chat = document.getElementById('chat');
+  const empty = chat.querySelector('.empty');
+  if (empty) empty.remove();
+  const msg = document.createElement('div');
+  const cls = role === 'user' ? 'user' : role === 'agent' ? 'agent' : 'luna';
+  msg.className = `msg ${cls}`;
+  const who = role === 'user' ? 'YOU' : agentName ? agentName.toUpperCase() : 'LUNA';
+  msg.innerHTML = `<div class="who">${escape(who)}</div><div class="body">${renderMarkdown(content)}</div>`;
+  chat.appendChild(msg);
+  chat.scrollTop = chat.scrollHeight;
+  return msg;
+}
+function showTyping() {
+  const chat = document.getElementById('chat');
+  const msg = document.createElement('div');
+  msg.className = 'msg luna';
+  msg.id = 'typing-indicator';
+  msg.innerHTML = `<div class="who">LUNA</div><div class="body"><div class="typing"><span></span><span></span><span></span></div></div>`;
+  chat.appendChild(msg);
+  chat.scrollTop = chat.scrollHeight;
+}
+function hideTyping() {
+  const t = document.getElementById('typing-indicator');
+  if (t) t.remove();
+}
+function renderActivity(activities) {
+  const list = document.getElementById('activity-list');
+  if (!activities || !activities.length) {
+    list.innerHTML = '<div class="empty" style="font-size:12px;margin-top:20px;">No activity for last request.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  activities.forEach(a => {
+    const row = document.createElement('div');
+    row.className = 'activity-row';
+    const status = (a.status || '').toLowerCase();
+    const preview = (a.result || '').slice(0, 200);
+    row.innerHTML = `
+      <div class="header-row">
+        <span class="agent-name">${escape(a.agent_name)}</span>
+        <span class="badge ${status}">${escape(a.status)}</span>
+      </div>
+      <div class="duration">${a.duration_ms}ms</div>
+      <div class="preview">${escape(preview)}${preview.length === 200 ? '…' : ''}</div>`;
+    list.appendChild(row);
+  });
+}
+function setAgentBusy(name, busy) {
+  document.querySelectorAll('.agent-card').forEach(c => {
+    if (c.dataset.agent === name) c.classList.toggle('busy', busy);
+  });
+}
+async function send(e) {
+  e.preventDefault();
+  const input = document.getElementById('input');
+  const btn = document.getElementById('send-btn');
+  const text = input.value.trim();
+  if (!text) return;
+  addMessage('user', text);
+  input.value = '';
+  input.style.height = 'auto';
+  btn.disabled = true;
+  showTyping();
+  try {
+    const r = await fetch(`${API}/api/message`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: text, session_id: sessionId }),
+    });
+    hideTyping();
+    if (!r.ok) {
+      const errText = await r.text();
+      addMessage('error', `Request failed (${r.status}): ${errText}`);
+      return;
+    }
+    const j = await r.json();
+    if (j.session_id) {
+      sessionId = j.session_id;
+      localStorage.setItem('forge_session', sessionId);
+      document.getElementById('m-session').textContent = sessionId.slice(0, 8);
+    }
+    addMessage('luna', j.response || '(empty response)');
+    renderActivity(j.activities);
+    if (j.usage) updateTokenGauge(j.usage);
+  } catch (err) {
+    hideTyping();
+    addMessage('error', `Network error: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    input.focus();
+  }
+}
+document.getElementById('input').addEventListener('input', e => {
+  e.target.style.height = 'auto';
+  e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+});
+
+// ═══════════════ KANBAN ═══════════════
+async function refreshKanban() {
+  const scope = document.getElementById('kb-scope').value;
+  const url = scope === 'session'
+    ? `${API}/api/tasks?session_id=${encodeURIComponent(sessionId)}`
+    : `${API}/api/tasks?limit=200`;
+  try {
+    const r = await fetch(url);
+    const j = await r.json();
+    renderKanban(j.tasks || []);
+  } catch (e) {
+    console.error('kanban error', e);
+  }
+}
+document.getElementById('kb-scope').addEventListener('change', refreshKanban);
+function renderKanban(tasks) {
+  const cols = { pending: [], running: [], completed: [], failed: [], skipped: [] };
+  tasks.forEach(t => {
+    const s = (t.status || 'pending').toLowerCase();
+    (cols[s] || cols.pending).push(t);
+  });
+  ['pending','running','completed','failed'].forEach(status => {
+    const colBody = document.getElementById('kb-' + status);
+    const colCount = document.getElementById('kb-c-' + status);
+    const list = cols[status] || [];
+    colCount.textContent = list.length;
+    colBody.innerHTML = '';
+    if (list.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.style.cssText = 'font-size:11px;margin-top:20px;';
+      empty.textContent = '—';
+      colBody.appendChild(empty);
+      return;
+    }
+    list.forEach(t => {
+      const card = document.createElement('div');
+      card.className = 'kanban-card';
+      card.dataset.status = status;
+      const dur = t.completed_at && t.started_at
+        ? Math.max(0, new Date(t.completed_at).getTime() - new Date(t.started_at).getTime()) + 'ms'
+        : t.started_at ? 'started' : 'queued';
+      card.innerHTML = `
+        <div class="agent">${escape(t.agent_name)}</div>
+        <div class="desc">${escape(t.description)}</div>
+        <div class="meta">
+          <span>${dur}</span>
+          <span>${relTime(t.created_at)}</span>
+        </div>`;
+      colBody.appendChild(card);
+    });
+  });
+}
+
+// ═══════════════ MISSION CONTROL ═══════════════
+async function refreshMission() {
+  try {
+    const [statsR, sessR] = await Promise.all([
+      fetch(`${API}/api/stats`).then(r => r.json()),
+      fetch(`${API}/api/sessions?limit=20`).then(r => r.json()),
+    ]);
+    lastStats = statsR;
+    renderKPIs(statsR);
+    renderAgentGrid(statsR);
+    renderSessions(sessR.sessions || []);
+    updateTokenGauge(statsR.usage);
+  } catch (e) {
+    console.error('mission error', e);
+  }
+}
+function renderKPIs(s) {
+  const total = s.total_tasks || 0;
+  const done = s.completed_tasks || 0;
+  const fail = s.failed_tasks || 0;
+  const pct = total ? Math.round(done / total * 100) : 0;
+  const failPct = total ? Math.round(fail / total * 100) : 0;
+  document.getElementById('kpi-total').textContent = total.toLocaleString();
+  document.getElementById('kpi-total-sub').textContent =
+    `${(s.pending_tasks || 0)} pending · ${(s.running_tasks || 0)} running`;
+  document.getElementById('kpi-done').textContent = done.toLocaleString();
+  document.getElementById('kpi-done-sub').textContent = `${pct}% success rate`;
+  document.getElementById('kpi-failed').textContent = fail.toLocaleString();
+  document.getElementById('kpi-failed-sub').textContent = `${failPct}% of total`;
+  document.getElementById('kpi-running').textContent = (s.running_tasks || 0).toLocaleString();
+  document.getElementById('kpi-sessions').textContent = (s.total_sessions || 0).toLocaleString();
+  document.getElementById('kpi-sessions-sub').textContent =
+    `${(s.total_messages || 0).toLocaleString()} messages exchanged`;
+  const u = s.usage || {};
+  document.getElementById('kpi-tokens').textContent =
+    `${(u.input_tokens || 0).toLocaleString()} / ${(u.output_tokens || 0).toLocaleString()}`;
+}
+function renderAgentGrid(s) {
+  const grid = document.getElementById('agent-grid');
+  grid.innerHTML = '';
+  const byAgent = s.by_agent || [];
+  if (byAgent.length === 0) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1;font-size:12px;">No agent activity yet. Send a message in Chat to populate.</div>';
+    return;
+  }
+  byAgent.forEach(a => {
+    const successRate = a.total ? Math.round(a.completed / a.total * 100) : 0;
+    const tile = document.createElement('div');
+    tile.className = 'agent-tile';
+    tile.innerHTML = `
+      <div class="a-name">
+        ${escape(a.agent_name)}
+        <span class="badge completed">${successRate}%</span>
+      </div>
+      <div class="a-stat-grid">
+        <div class="a-stat">
+          <div class="a-stat-num">${a.total}</div>
+          <div class="a-stat-lbl">Total</div>
+        </div>
+        <div class="a-stat ok">
+          <div class="a-stat-num">${a.completed}</div>
+          <div class="a-stat-lbl">Done</div>
+        </div>
+        <div class="a-stat err">
+          <div class="a-stat-num">${a.failed}</div>
+          <div class="a-stat-lbl">Failed</div>
+        </div>
+      </div>`;
+    grid.appendChild(tile);
+  });
+}
+function renderSessions(sessions) {
+  const list = document.getElementById('session-list');
+  if (!sessions.length) {
+    list.innerHTML = '<div class="empty" style="padding:20px;">No sessions yet.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  sessions.forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'session-row';
+    row.innerHTML = `
+      <div class="sid">${escape(s.id.slice(0, 8))}</div>
+      <div>${escape(s.user_id)}</div>
+      <div class="counts"><span><b>${s.message_count}</b> msg</span><span><b>${s.task_count}</b> tasks</span></div>
+      <div class="stamp">${relTime(s.updated_at)}</div>`;
+    row.addEventListener('click', () => {
+      sessionId = s.id;
+      localStorage.setItem('forge_session', sessionId);
+      document.getElementById('m-session').textContent = sessionId.slice(0, 8);
+      document.querySelector('nav.tabs button[data-tab="chat"]').click();
+      loadHistory();
+    });
+    list.appendChild(row);
+  });
+}
+
+// ═══════════════ GLOBAL ═══════════════
+function refreshAll() {
+  loadStatus();
+  loadHistory();
+  if (currentTab === 'kanban') refreshKanban();
+  if (currentTab === 'mission') refreshMission();
+}
+
+// Auto-poll while a kanban or mission tab is open (every 5s)
+setInterval(() => {
+  if (currentTab === 'kanban') refreshKanban();
+  if (currentTab === 'mission') refreshMission();
+}, 5000);
+
+// ═══════════════ VOICE: speech-to-text + text-to-speech ═══════════════
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let recognizing = false;
+let ttsEnabled = localStorage.getItem('forge_tts') === '1';
+
+function setTTSButton() {
+  const btn = document.getElementById('tts-btn');
+  if (ttsEnabled) {
+    btn.textContent = '🔊';
+    btn.classList.add('tts-on');
+    btn.title = 'Click to mute (Luna is reading replies aloud)';
+  } else {
+    btn.textContent = '🔇';
+    btn.classList.remove('tts-on');
+    btn.title = 'Click to enable voice replies';
+  }
+}
+setTTSButton();
+
+function toggleTTS() {
+  ttsEnabled = !ttsEnabled;
+  localStorage.setItem('forge_tts', ttsEnabled ? '1' : '0');
+  if (!ttsEnabled && window.speechSynthesis) window.speechSynthesis.cancel();
+  setTTSButton();
+}
+
+function speak(text) {
+  if (!ttsEnabled || !window.speechSynthesis) return;
+  // Strip markdown / code fences for cleaner TTS.
+  const clean = text
+    .replace(/```[\s\S]*?```/g, ' (code block) ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/[*_#]/g, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+  const u = new SpeechSynthesisUtterance(clean);
+  u.rate = 1.05;
+  u.pitch = 1.0;
+  // Pick the first English voice if available.
+  const voices = window.speechSynthesis.getVoices();
+  const en = voices.find(v => v.lang && v.lang.startsWith('en'));
+  if (en) u.voice = en;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(u);
+}
+
+function toggleMic() {
+  const btn = document.getElementById('mic-btn');
+  if (!SR) {
+    alert('Speech recognition not supported in this browser. Try Chrome, Edge, or Safari.');
+    btn.classList.add('disabled');
+    return;
+  }
+  if (recognizing) {
+    recognition && recognition.stop();
+    return;
+  }
+  recognition = new SR();
+  recognition.lang = 'en-US';
+  recognition.interimResults = true;
+  recognition.continuous = false;
+
+  const input = document.getElementById('input');
+  let baseText = input.value;
+
+  recognition.onstart = () => {
+    recognizing = true;
+    btn.classList.add('recording');
+    btn.textContent = '⏹';
+  };
+  recognition.onresult = (e) => {
+    let interim = '';
+    let final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const txt = e.results[i][0].transcript;
+      if (e.results[i].isFinal) final += txt;
+      else interim += txt;
+    }
+    input.value = (baseText + ' ' + final + interim).trim();
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  };
+  recognition.onerror = (e) => {
+    console.warn('SR error', e.error);
+  };
+  recognition.onend = () => {
+    recognizing = false;
+    btn.classList.remove('recording');
+    btn.textContent = '🎤';
+    // Auto-send if user has set that preference (default: don't, let them edit).
+    if (input.value.trim() && localStorage.getItem('forge_voice_autosend') === '1') {
+      document.querySelector('.composer').dispatchEvent(new Event('submit', {cancelable: true}));
+    }
+  };
+  recognition.start();
+}
+
+if (!SR) {
+  document.getElementById('mic-btn').classList.add('disabled');
+  document.getElementById('mic-btn').title = 'Voice input not supported in this browser';
+}
+
+// Hook into addMessage so Luna's replies get spoken.
+const _originalAddMessage = addMessage;
+addMessage = function(role, content, agentName) {
+  const result = _originalAddMessage(role, content, agentName);
+  if (role !== 'user' && content && ttsEnabled) {
+    speak(content);
+  }
+  return result;
+};
+
+// Boot — checks auth, then loads if allowed (or shows login overlay).
+checkAuthThenBoot();
+</script>
+</body>
+</html>
