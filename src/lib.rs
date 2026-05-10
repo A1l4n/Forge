@@ -7,7 +7,6 @@
 pub mod agents;
 pub mod claude;     // legacy Claude client kept for backward compat
 pub mod config;
-pub mod errors;
 pub mod gateway;
 pub mod llm;        // new multi-provider abstraction (preferred)
 pub mod logging;

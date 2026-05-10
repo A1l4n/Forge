@@ -27,6 +27,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::sync::Arc;
 use uuid::Uuid;
+use clap::Parser;
 
 use forge::{
     agents::{full_team, Agent},
@@ -241,7 +242,8 @@ fn build_provider(args: &Args) -> Result<Arc<dyn LLMProvider>, Box<dyn std::erro
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    logging::init_logging();
+    logging::init();
+
     let args = Args::parse();
 
     let llm = build_provider(&args)?;
@@ -330,9 +332,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     context: None,
                 };
 
-                let result = orchestrator
-                    .process_with_agents(request, &agents, &memory)
-                    .await?;
+    let orchestrator = Orchestrator::new(claude);
 
                 if !result.activities.is_empty() {
                     println!("Tool / agent activity:");
