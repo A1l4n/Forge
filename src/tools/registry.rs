@@ -42,6 +42,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
+
 use crate::errors::{Error, Result};
 use crate::memory::MemoryStore;
 use crate::models::{Tool, ToolInput, ToolResult};
@@ -284,7 +285,7 @@ impl ToolRegistry {
     }
 
     /// Build the **full** toolkit: filesystem + execution + network +
-    /// self-modification + memory + team management + skills + wallet.
+    /// self-modification + memory + team management + skills + wallet + binance.
     /// This is what Luna gets at startup. Requires a [`MemoryStore`] for the
     /// memory + team + skills tools.
     pub fn with_full_toolkit(memory: Arc<MemoryStore>) -> Self {
@@ -293,6 +294,7 @@ impl ToolRegistry {
         Self::register_team(&mut r, memory.clone());
         Self::register_skills(&mut r, memory);
         Self::register_wallet(&mut r);
+        Self::register_binance(&mut r);
         r
     }
 
@@ -663,6 +665,189 @@ impl ToolRegistry {
                 memory,
                 f: builtin::list_skills,
             }),
+        );
+    }
+
+    fn register_binance(r: &mut Self) {
+        // ── Public endpoints (no auth) ──────────────────────────────────────
+        r.register_with(
+            Tool::new(
+                "binance_price".into(),
+                "Get the current price and 24h stats for a Binance trading pair \
+                 (e.g. SOLUSDT, BTCUSDT, ETHUSDT). No API key required."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Trading pair, e.g. SOLUSDT, BTCUSDT, BNBUSDT."
+                        }
+                    },
+                    "required": ["symbol"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_price)),
+        );
+
+        r.register_with(
+            Tool::new(
+                "binance_klines".into(),
+                "Get OHLCV candlestick data for a Binance trading pair. \
+                 Useful for technical analysis — supports 1m, 5m, 15m, 1h, 4h, 1d intervals."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string", "description": "E.g. SOLUSDT" },
+                        "interval": {
+                            "type": "string",
+                            "description": "Candle size: 1m, 5m, 15m, 1h, 4h, 1d, 1w. Default 1h."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Number of candles, default 50, max 500."
+                        }
+                    },
+                    "required": ["symbol"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_klines)),
+        );
+
+        r.register_with(
+            Tool::new(
+                "binance_top_movers".into(),
+                "Get the top gaining and top losing coins on Binance in the last 24h. \
+                 Useful for spotting momentum plays. No API key required."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "How many top/bottom coins to return. Default 10."
+                        },
+                        "quote": {
+                            "type": "string",
+                            "description": "Quote asset filter, e.g. USDT. Default USDT."
+                        },
+                        "min_volume_usdt": {
+                            "type": "number",
+                            "description": "Minimum 24h volume in USDT to filter low-liquidity coins. Default 1000000."
+                        }
+                    }
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_top_movers)),
+        );
+
+        // ── Authenticated read-only endpoints ───────────────────────────────
+        r.register_with(
+            Tool::new(
+                "binance_balance".into(),
+                "Get your Binance spot account balances. \
+                 Requires BINANCE_API_KEY env var (read-only permission sufficient)."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "asset": {
+                            "type": "string",
+                            "description": "Optional: filter to a specific asset, e.g. USDT."
+                        }
+                    }
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_balance)),
+        );
+
+        r.register_with(
+            Tool::new(
+                "binance_open_orders".into(),
+                "List your currently open orders on Binance spot. \
+                 Requires BINANCE_API_KEY and BINANCE_API_SECRET."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Optional symbol filter, e.g. SOLUSDT."
+                        }
+                    }
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_open_orders)),
+        );
+
+        // ── Trade execution (Confirm tier — real money) ─────────────────────
+        r.register_tiered(
+            Tool::new(
+                "binance_place_order".into(),
+                "Place a market or limit order on Binance spot. \
+                 Requires BINANCE_API_KEY and BINANCE_API_SECRET env vars with SPOT trading enabled. \
+                 ⚠️  This executes a REAL trade with real money unless BINANCE_TESTNET=true is set. \
+                 Always state the exact symbol, side, type, and quantity before calling. \
+                 Set BINANCE_TESTNET=true in Render env to paper-trade first."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Trading pair, e.g. SOLUSDT, BTCUSDT."
+                        },
+                        "side": {
+                            "type": "string",
+                            "enum": ["BUY", "SELL"]
+                        },
+                        "order_type": {
+                            "type": "string",
+                            "enum": ["MARKET", "LIMIT"],
+                            "description": "MARKET fills immediately. LIMIT waits for target price."
+                        },
+                        "quantity": {
+                            "type": "string",
+                            "description": "Amount of the BASE asset (for SOLUSDT this is SOL)."
+                        },
+                        "price": {
+                            "type": "string",
+                            "description": "Limit price (USDT). Required for LIMIT orders."
+                        },
+                        "time_in_force": {
+                            "type": "string",
+                            "enum": ["GTC", "IOC", "FOK"],
+                            "description": "GTC = Good Till Cancelled (default). IOC = Immediate or Cancel. FOK = Fill or Kill."
+                        }
+                    },
+                    "required": ["symbol", "side", "order_type", "quantity"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_place_order)),
+            Tier::Confirm,
+        );
+
+        r.register_tiered(
+            Tool::new(
+                "binance_cancel_order".into(),
+                "Cancel an open Binance spot order by order ID. \
+                 Requires BINANCE_API_KEY and BINANCE_API_SECRET."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string", "description": "E.g. SOLUSDT" },
+                        "order_id": {
+                            "type": "integer",
+                            "description": "The orderId returned by binance_place_order."
+                        }
+                    },
+                    "required": ["symbol", "order_id"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_cancel_order)),
+            Tier::Confirm,
         );
     }
 
@@ -1352,6 +1537,402 @@ mod builtin {
             "change_24h": change_24h,
             "raw": json
         }))
+    }
+
+    // ── Binance helpers ──────────────────────────────────────────────────────
+
+    fn binance_base() -> String {
+        if std::env::var("BINANCE_TESTNET")
+            .map(|v| v.to_ascii_lowercase() == "true")
+            .unwrap_or(false)
+        {
+            "https://testnet.binance.vision".to_string()
+        } else {
+            "https://api.binance.com".to_string()
+        }
+    }
+
+    fn binance_sign(params: &str, secret: &str) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+            .expect("HMAC accepts any key length");
+        mac.update(params.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    fn binance_now_ms() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    }
+
+    async fn binance_get(url: &str, api_key: &str) -> Result<Value> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("http client: {}", e)))?;
+        let resp = client
+            .get(url)
+            .header("X-MBX-APIKEY", api_key)
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
+        let status = resp.status();
+        let json: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!(
+                "Binance API {} — {}",
+                status,
+                json.get("msg").and_then(|v| v.as_str()).unwrap_or(&json.to_string())
+            )));
+        }
+        Ok(json)
+    }
+
+    async fn binance_public_get(url: &str) -> Result<Value> {
+        binance_get(url, "").await
+    }
+
+    // ── Public tools ─────────────────────────────────────────────────────────
+
+    pub async fn binance_price(input: ToolInput) -> Result<Value> {
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let url = format!("{}/api/v3/ticker/24hr?symbol={}", binance_base(), symbol);
+        let j = binance_public_get(&url).await?;
+        Ok(json!({
+            "symbol": symbol,
+            "price": j["lastPrice"],
+            "open": j["openPrice"],
+            "high": j["highPrice"],
+            "low": j["lowPrice"],
+            "change_24h_pct": j["priceChangePercent"],
+            "change_24h_usd": j["priceChange"],
+            "volume_base": j["volume"],
+            "volume_quote": j["quoteVolume"],
+            "trades": j["count"],
+        }))
+    }
+
+    pub async fn binance_klines(input: ToolInput) -> Result<Value> {
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let interval = input.get_string("interval").unwrap_or_else(|| "1h".into());
+        let limit = input
+            .get_number("limit")
+            .map(|n| (n as u32).min(500))
+            .unwrap_or(50);
+        let url = format!(
+            "{}/api/v3/klines?symbol={}&interval={}&limit={}",
+            binance_base(),
+            symbol,
+            interval,
+            limit
+        );
+        let j = binance_public_get(&url).await?;
+        let candles: Vec<Value> = j
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|k| {
+                let a = k.as_array().unwrap();
+                json!({
+                    "time_ms": a[0],
+                    "open":  a[1],
+                    "high":  a[2],
+                    "low":   a[3],
+                    "close": a[4],
+                    "volume": a[5],
+                })
+            })
+            .collect();
+        Ok(json!({
+            "symbol": symbol,
+            "interval": interval,
+            "count": candles.len(),
+            "candles": candles,
+        }))
+    }
+
+    pub async fn binance_top_movers(input: ToolInput) -> Result<Value> {
+        let limit = input
+            .get_number("limit")
+            .map(|n| n as usize)
+            .unwrap_or(10);
+        let quote = input
+            .get_string("quote")
+            .unwrap_or_else(|| "USDT".into())
+            .to_uppercase();
+        let min_vol = input.get_number("min_volume_usdt").unwrap_or(1_000_000.0);
+
+        let url = format!("{}/api/v3/ticker/24hr", binance_base());
+        let j = binance_public_get(&url).await?;
+
+        let mut tickers: Vec<(f64, Value)> = j
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter(|t| {
+                let sym = t["symbol"].as_str().unwrap_or("");
+                let vol: f64 = t["quoteVolume"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0);
+                sym.ends_with(&quote) && vol >= min_vol
+            })
+            .filter_map(|t| {
+                let pct: f64 = t["priceChangePercent"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())?;
+                Some((pct, json!({
+                    "symbol": t["symbol"],
+                    "price": t["lastPrice"],
+                    "change_24h_pct": t["priceChangePercent"],
+                    "volume_usdt": t["quoteVolume"],
+                })))
+            })
+            .collect();
+
+        tickers.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let gainers: Vec<Value> = tickers.iter().take(limit).map(|(_, v)| v.clone()).collect();
+        let losers: Vec<Value> = tickers.iter().rev().take(limit).map(|(_, v)| v.clone()).collect();
+
+        Ok(json!({
+            "quote": quote,
+            "top_gainers": gainers,
+            "top_losers":  losers,
+        }))
+    }
+
+    // ── Authenticated read tools ──────────────────────────────────────────────
+
+    pub async fn binance_balance(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BINANCE_API_KEY").map_err(|_| {
+            Error::ToolExecution(
+                "BINANCE_API_KEY env var not set. \
+                 Add it to your Render environment variables."
+                    .into(),
+            )
+        })?;
+        let secret = std::env::var("BINANCE_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_SECRET env var not set.".into())
+        })?;
+        let asset_filter = input.get_string("asset").map(|s| s.to_uppercase());
+        let ts = binance_now_ms();
+        let params = format!("timestamp={}", ts);
+        let sig = binance_sign(&params, &secret);
+        let url = format!(
+            "{}/api/v3/account?{}&signature={}",
+            binance_base(),
+            params,
+            sig
+        );
+        let j = binance_get(&url, &api_key).await?;
+
+        let all_balances = j["balances"].as_array().cloned().unwrap_or_default();
+        let balances: Vec<Value> = all_balances
+            .iter()
+            .filter(|b| {
+                let free: f64 = b["free"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                let locked: f64 =
+                    b["locked"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                let total = free + locked;
+                match &asset_filter {
+                    Some(f) => b["asset"].as_str() == Some(f.as_str()),
+                    None => total > 0.0,
+                }
+            })
+            .map(|b| {
+                json!({
+                    "asset": b["asset"],
+                    "free": b["free"],
+                    "locked": b["locked"],
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "balances": balances,
+            "can_trade": j["canTrade"],
+            "can_withdraw": j["canWithdraw"],
+            "testnet": std::env::var("BINANCE_TESTNET")
+                .map(|v| v.to_ascii_lowercase() == "true")
+                .unwrap_or(false),
+        }))
+    }
+
+    pub async fn binance_open_orders(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BINANCE_API_KEY").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_KEY env var not set.".into())
+        })?;
+        let secret = std::env::var("BINANCE_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_SECRET env var not set.".into())
+        })?;
+        let symbol = input.get_string("symbol").map(|s| s.to_uppercase());
+        let ts = binance_now_ms();
+        let params = match &symbol {
+            Some(sym) => format!("symbol={}&timestamp={}", sym, ts),
+            None => format!("timestamp={}", ts),
+        };
+        let sig = binance_sign(&params, &secret);
+        let url = format!(
+            "{}/api/v3/openOrders?{}&signature={}",
+            binance_base(),
+            params,
+            sig
+        );
+        let j = binance_get(&url, &api_key).await?;
+        let count = j.as_array().map(|a| a.len()).unwrap_or(0);
+        Ok(json!({ "count": count, "orders": j }))
+    }
+
+    // ── Trade execution ───────────────────────────────────────────────────────
+
+    pub async fn binance_place_order(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BINANCE_API_KEY").map_err(|_| {
+            Error::ToolExecution(
+                "BINANCE_API_KEY env var not set. \
+                 This tool requires Spot trading credentials."
+                    .into(),
+            )
+        })?;
+        let secret = std::env::var("BINANCE_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_SECRET env var not set.".into())
+        })?;
+
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let side = input
+            .get_string("side")
+            .ok_or_else(|| Error::ToolExecution("missing 'side' (BUY or SELL)".into()))?
+            .to_uppercase();
+        let order_type = input
+            .get_string("order_type")
+            .ok_or_else(|| Error::ToolExecution("missing 'order_type' (MARKET or LIMIT)".into()))?
+            .to_uppercase();
+        let quantity = input
+            .get_string("quantity")
+            .ok_or_else(|| Error::ToolExecution("missing 'quantity'".into()))?;
+        let price = input.get_string("price");
+        let tif = input.get_string("time_in_force").unwrap_or_else(|| "GTC".into());
+
+        let ts = binance_now_ms();
+        let mut params = format!(
+            "symbol={}&side={}&type={}&quantity={}&timestamp={}",
+            symbol, side, order_type, quantity, ts
+        );
+        if order_type == "LIMIT" {
+            let p = price.as_ref().ok_or_else(|| {
+                Error::ToolExecution("LIMIT order requires 'price'".into())
+            })?;
+            params.push_str(&format!("&price={}&timeInForce={}", p, tif));
+        }
+
+        let sig = binance_sign(&params, &secret);
+        let url = format!("{}/api/v3/order", binance_base());
+        let body = format!("{}&signature={}", params, sig);
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
+        let resp = client
+            .post(&url)
+            .header("X-MBX-APIKEY", &api_key)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
+        let status = resp.status();
+        let j: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!(
+                "Binance place order {} — {}",
+                status,
+                j.get("msg").and_then(|v| v.as_str()).unwrap_or(&j.to_string())
+            )));
+        }
+        Ok(json!({
+            "order_id":        j["orderId"],
+            "client_order_id": j["clientOrderId"],
+            "symbol":          j["symbol"],
+            "side":            j["side"],
+            "type":            j["type"],
+            "status":          j["status"],
+            "price":           j["price"],
+            "orig_qty":        j["origQty"],
+            "executed_qty":    j["executedQty"],
+            "fills":           j["fills"],
+            "testnet": std::env::var("BINANCE_TESTNET")
+                .map(|v| v.to_ascii_lowercase() == "true")
+                .unwrap_or(false),
+        }))
+    }
+
+    pub async fn binance_cancel_order(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BINANCE_API_KEY").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_KEY env var not set.".into())
+        })?;
+        let secret = std::env::var("BINANCE_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_SECRET env var not set.".into())
+        })?;
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let order_id = input
+            .get_number("order_id")
+            .ok_or_else(|| Error::ToolExecution("missing 'order_id'".into()))? as u64;
+
+        let ts = binance_now_ms();
+        let params = format!("symbol={}&orderId={}&timestamp={}", symbol, order_id, ts);
+        let sig = binance_sign(&params, &secret);
+        let url = format!(
+            "{}/api/v3/order?{}&signature={}",
+            binance_base(),
+            params,
+            sig
+        );
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
+        let resp = client
+            .delete(&url)
+            .header("X-MBX-APIKEY", &api_key)
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
+        let status = resp.status();
+        let j: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!(
+                "Binance cancel {} — {}",
+                status,
+                j.get("msg").and_then(|v| v.as_str()).unwrap_or(&j.to_string())
+            )));
+        }
+        Ok(json!({ "cancelled": true, "order": j }))
     }
 
     pub(super) fn urlencode(s: &str) -> String {
