@@ -1,10 +1,6 @@
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
-use crate::Result;
-use crate::errors::ForgeError;
+//! Memory module - State and persistence
 
-pub struct MemoryStore {
-    pool: SqlitePool,
-}
+pub mod store;
 
 pub use store::{
     AgentStats, DashboardStats, DynamicAgentRow, Memory, MemoryStore, SessionSummary, Skill,

@@ -1,30 +1,53 @@
+//! Error types for Forge
+
 use thiserror::Error;
 
-pub type Result<T> = std::result::Result<T, ForgeError>;
-
 #[derive(Error, Debug)]
-pub enum ForgeError {
+pub enum Error {
     #[error("Claude API error: {0}")]
-    ApiError(String),
-
-    #[error("Configuration error: {0}")]
-    ConfigError(String),
+    ClaudeAPI(String),
 
     #[error("Database error: {0}")]
-    DatabaseError(String),
+    Database(#[from] sqlx::Error),
 
-    #[error("Agent error: {0}")]
-    AgentError(String),
+    #[error("Invalid configuration: {0}")]
+    Configuration(String),
 
-    #[error("Tool error: {0}")]
-    ToolError(String),
+    #[error("Task not found: {0}")]
+    TaskNotFound(String),
+
+    #[error("Agent not found: {0}")]
+    AgentNotFound(String),
+
+    #[error("Tool not found: {0}")]
+    ToolNotFound(String),
+
+    #[error("Tool execution failed: {0}")]
+    ToolExecution(String),
+
+    #[error("Authentication failed: {0}")]
+    Authentication(String),
+
+    #[error("Orchestration error: {0}")]
+    Orchestration(String),
+
+    #[error("Memory error: {0}")]
+    Memory(String),
 
     #[error("Serialization error: {0}")]
-    SerializationError(#[from] serde_json::Error),
+    Serialization(#[from] serde_json::Error),
 
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
+    #[error("HTTP error: {0}")]
+    HTTP(String),
 
-    #[error("Unknown error: {0}")]
-    Unknown(String),
+    #[error("Internal error: {0}")]
+    Internal(String),
+
+    #[error("Timeout: {0}")]
+    Timeout(String),
+
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
+
+pub type Result<T> = std::result::Result<T, Error>;

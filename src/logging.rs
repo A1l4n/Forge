@@ -1,15 +1,19 @@
-use tracing_subscriber::{
-    fmt,
-    prelude::*,
-    EnvFilter,
-};
+//! Logging setup
 
-pub fn init() {
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+pub fn init_logging() {
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+        .unwrap_or_else(|_| EnvFilter::new("forge=debug,info"));
 
     tracing_subscriber::registry()
         .with(env_filter)
-        .with(fmt::layer().with_writer(std::io::stdout))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_thread_ids(true)
+                .with_target(true)
+                .pretty(),
+        )
         .init();
 }
