@@ -295,6 +295,7 @@ impl ToolRegistry {
         Self::register_skills(&mut r, memory);
         Self::register_wallet(&mut r);
         Self::register_binance(&mut r);
+        Self::register_futures(&mut r);
         r
     }
 
@@ -847,6 +848,219 @@ impl ToolRegistry {
                 }),
             ),
             Arc::new(FnExecutor(builtin::binance_cancel_order)),
+            Tier::Confirm,
+        );
+    }
+
+    fn register_futures(r: &mut Self) {
+        // ── Public endpoints (no auth) ──────────────────────────────────────
+        r.register_with(
+            Tool::new(
+                "binance_futures_price".into(),
+                "Get the current mark price for a Binance USD-margined futures pair \
+                 (e.g. SOLUSDT, BTCUSDT). No API key required. \
+                 Uses the fapi.binance.com endpoint."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Futures pair, e.g. SOLUSDT, BTCUSDT, ETHUSDT."
+                        }
+                    },
+                    "required": ["symbol"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_futures_price)),
+        );
+
+        // ── Authenticated read-only endpoints ───────────────────────────────
+        r.register_with(
+            Tool::new(
+                "binance_futures_balance".into(),
+                "Get your Binance USD-margined futures wallet balance (USDC/USDT). \
+                 Requires BINANCE_API_KEY and BINANCE_API_SECRET env vars. \
+                 Uses GET /fapi/v2/balance."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "asset": {
+                            "type": "string",
+                            "description": "Optional: filter to a specific asset, e.g. USDC or USDT."
+                        }
+                    }
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_futures_balance)),
+        );
+
+        r.register_with(
+            Tool::new(
+                "binance_futures_positions".into(),
+                "List all open USD-margined futures positions. \
+                 Returns symbol, position amount, entry price, unrealized PnL, leverage, and side. \
+                 Requires BINANCE_API_KEY and BINANCE_API_SECRET. \
+                 Uses GET /fapi/v2/positionRisk."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Optional: filter to a specific symbol, e.g. SOLUSDT."
+                        }
+                    }
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_futures_positions)),
+        );
+
+        // ── Trade/transfer execution (Confirm tier) ─────────────────────────
+        r.register_tiered(
+            Tool::new(
+                "binance_futures_transfer".into(),
+                "Transfer assets between Binance spot and USD-margined futures wallet. \
+                 Use type=1 to move from spot → futures, type=2 for futures → spot. \
+                 Use this when the user deposits USDC/USDT to spot and wants to trade futures \
+                 (binance_transfer_spot_to_futures convenience: call with type=1). \
+                 ⚠️  Moves real funds. Requires BINANCE_API_KEY and BINANCE_API_SECRET. \
+                 Uses POST /sapi/v1/futures/transfer."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "asset": {
+                            "type": "string",
+                            "description": "Asset to transfer, e.g. USDC or USDT."
+                        },
+                        "amount": {
+                            "type": "string",
+                            "description": "Amount as a string, e.g. \"100.0\"."
+                        },
+                        "transfer_type": {
+                            "type": "integer",
+                            "enum": [1, 2],
+                            "description": "1 = spot → futures (deposit to futures). 2 = futures → spot (withdraw from futures)."
+                        }
+                    },
+                    "required": ["asset", "amount", "transfer_type"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_futures_transfer)),
+            Tier::Confirm,
+        );
+
+        r.register_tiered(
+            Tool::new(
+                "binance_futures_place_order".into(),
+                "Place a market or limit order on Binance USD-margined futures. \
+                 Requires BINANCE_API_KEY and BINANCE_API_SECRET with futures trading enabled. \
+                 ⚠️  This executes a REAL futures trade with real money unless BINANCE_TESTNET=true. \
+                 For one-way mode use positionSide=BOTH (default). \
+                 For hedge mode use positionSide=LONG or SHORT. \
+                 Uses POST /fapi/v1/order."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Futures pair, e.g. SOLUSDT, BTCUSDT."
+                        },
+                        "side": {
+                            "type": "string",
+                            "enum": ["BUY", "SELL"],
+                            "description": "BUY to open long or close short; SELL to open short or close long."
+                        },
+                        "order_type": {
+                            "type": "string",
+                            "enum": ["MARKET", "LIMIT"],
+                            "description": "MARKET fills immediately at best price. LIMIT waits for target price."
+                        },
+                        "quantity": {
+                            "type": "string",
+                            "description": "Amount of the base asset (for SOLUSDT this is SOL quantity)."
+                        },
+                        "price": {
+                            "type": "string",
+                            "description": "Limit price (quote asset). Required for LIMIT orders."
+                        },
+                        "position_side": {
+                            "type": "string",
+                            "enum": ["BOTH", "LONG", "SHORT"],
+                            "description": "BOTH for one-way mode (default). LONG/SHORT for hedge mode."
+                        },
+                        "reduce_only": {
+                            "type": "boolean",
+                            "description": "If true, order only reduces an existing position. Default false."
+                        },
+                        "time_in_force": {
+                            "type": "string",
+                            "enum": ["GTC", "IOC", "FOK", "GTX"],
+                            "description": "GTC = Good Till Cancelled (default for LIMIT)."
+                        }
+                    },
+                    "required": ["symbol", "side", "order_type", "quantity"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_futures_place_order)),
+            Tier::Confirm,
+        );
+
+        r.register_tiered(
+            Tool::new(
+                "binance_futures_cancel_order".into(),
+                "Cancel an open USD-margined futures order by order ID. \
+                 Requires BINANCE_API_KEY and BINANCE_API_SECRET. \
+                 Uses DELETE /fapi/v1/order."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Futures pair, e.g. SOLUSDT."
+                        },
+                        "order_id": {
+                            "type": "integer",
+                            "description": "The orderId returned by binance_futures_place_order."
+                        }
+                    },
+                    "required": ["symbol", "order_id"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_futures_cancel_order)),
+            Tier::Confirm,
+        );
+
+        r.register_tiered(
+            Tool::new(
+                "binance_set_leverage".into(),
+                "Set the leverage for a USD-margined futures symbol (1–125x). \
+                 Call this before placing futures orders to configure your desired leverage. \
+                 Requires BINANCE_API_KEY and BINANCE_API_SECRET. \
+                 Uses POST /fapi/v1/leverage."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Futures pair, e.g. SOLUSDT, BTCUSDT."
+                        },
+                        "leverage": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 125,
+                            "description": "Leverage multiplier (1–125). Check Binance for symbol-specific max."
+                        }
+                    },
+                    "required": ["symbol", "leverage"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::binance_set_leverage)),
             Tier::Confirm,
         );
     }
@@ -1933,6 +2147,451 @@ mod builtin {
             )));
         }
         Ok(json!({ "cancelled": true, "order": j }))
+    }
+
+    // ── Binance Futures helpers ──────────────────────────────────────────────
+
+    fn binance_futures_base() -> String {
+        if std::env::var("BINANCE_TESTNET")
+            .map(|v| v.to_ascii_lowercase() == "true")
+            .unwrap_or(false)
+        {
+            "https://testnet.binancefuture.com".to_string()
+        } else {
+            "https://fapi.binance.com".to_string()
+        }
+    }
+
+    // ── Futures public tools ─────────────────────────────────────────────────
+
+    pub async fn binance_futures_price(input: ToolInput) -> Result<Value> {
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let url = format!(
+            "{}/fapi/v1/ticker/price?symbol={}",
+            binance_futures_base(),
+            symbol
+        );
+        let j = binance_public_get(&url).await?;
+        Ok(json!({
+            "symbol": symbol,
+            "price": j["price"],
+            "time_ms": j["time"],
+        }))
+    }
+
+    // ── Futures authenticated read tools ─────────────────────────────────────
+
+    pub async fn binance_futures_balance(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BINANCE_API_KEY").map_err(|_| {
+            Error::ToolExecution(
+                "BINANCE_API_KEY env var not set. \
+                 Add it to your environment variables to use futures tools."
+                    .into(),
+            )
+        })?;
+        let secret = std::env::var("BINANCE_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_SECRET env var not set.".into())
+        })?;
+        let asset_filter = input.get_string("asset").map(|s| s.to_uppercase());
+
+        let ts = binance_now_ms();
+        let params = format!("timestamp={}", ts);
+        let sig = binance_sign(&params, &secret);
+        let url = format!(
+            "{}/fapi/v2/balance?{}&signature={}",
+            binance_futures_base(),
+            params,
+            sig
+        );
+        let j = binance_get(&url, &api_key).await?;
+
+        let all: Vec<Value> = j.as_array().cloned().unwrap_or_default();
+        let balances: Vec<Value> = all
+            .iter()
+            .filter(|b| {
+                let wb: f64 = b["walletBalance"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0);
+                match &asset_filter {
+                    Some(f) => b["asset"].as_str() == Some(f.as_str()),
+                    None => wb > 0.0,
+                }
+            })
+            .map(|b| {
+                json!({
+                    "asset":            b["asset"],
+                    "wallet_balance":   b["walletBalance"],
+                    "available":        b["availableBalance"],
+                    "unrealized_pnl":   b["unrealizedProfit"],
+                    "cross_wallet_pnl": b["crossUnPnl"],
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "balances": balances,
+            "testnet": std::env::var("BINANCE_TESTNET")
+                .map(|v| v.to_ascii_lowercase() == "true")
+                .unwrap_or(false),
+        }))
+    }
+
+    pub async fn binance_futures_positions(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BINANCE_API_KEY").map_err(|_| {
+            Error::ToolExecution(
+                "BINANCE_API_KEY env var not set. \
+                 Required to list futures positions."
+                    .into(),
+            )
+        })?;
+        let secret = std::env::var("BINANCE_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_SECRET env var not set.".into())
+        })?;
+        let symbol_filter = input.get_string("symbol").map(|s| s.to_uppercase());
+
+        let ts = binance_now_ms();
+        let params = match &symbol_filter {
+            Some(sym) => format!("symbol={}&timestamp={}", sym, ts),
+            None => format!("timestamp={}", ts),
+        };
+        let sig = binance_sign(&params, &secret);
+        let url = format!(
+            "{}/fapi/v2/positionRisk?{}&signature={}",
+            binance_futures_base(),
+            params,
+            sig
+        );
+        let j = binance_get(&url, &api_key).await?;
+
+        let all: Vec<Value> = j.as_array().cloned().unwrap_or_default();
+        // Filter to positions that actually have a non-zero position amount
+        let positions: Vec<Value> = all
+            .iter()
+            .filter(|p| {
+                let amt: f64 = p["positionAmt"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0);
+                amt != 0.0
+            })
+            .map(|p| {
+                json!({
+                    "symbol":         p["symbol"],
+                    "position_amt":   p["positionAmt"],
+                    "entry_price":    p["entryPrice"],
+                    "mark_price":     p["markPrice"],
+                    "unrealized_pnl": p["unRealizedProfit"],
+                    "leverage":       p["leverage"],
+                    "position_side":  p["positionSide"],
+                    "liquidation":    p["liquidationPrice"],
+                    "margin_type":    p["marginType"],
+                    "notional":       p["notional"],
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "open_positions": positions.len(),
+            "positions": positions,
+        }))
+    }
+
+    // ── Futures trade / transfer execution ──────────────────────────────────
+
+    pub async fn binance_futures_transfer(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BINANCE_API_KEY").map_err(|_| {
+            Error::ToolExecution(
+                "BINANCE_API_KEY env var not set. \
+                 Required to transfer between spot and futures wallets."
+                    .into(),
+            )
+        })?;
+        let secret = std::env::var("BINANCE_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_SECRET env var not set.".into())
+        })?;
+
+        let asset = input
+            .get_string("asset")
+            .ok_or_else(|| Error::ToolExecution("missing 'asset' (e.g. USDC)".into()))?
+            .to_uppercase();
+        let amount = input
+            .get_string("amount")
+            .ok_or_else(|| Error::ToolExecution("missing 'amount'".into()))?;
+        let transfer_type = input
+            .get_number("transfer_type")
+            .ok_or_else(|| Error::ToolExecution("missing 'transfer_type' (1=spot→futures, 2=futures→spot)".into()))? as u32;
+        if transfer_type != 1 && transfer_type != 2 {
+            return Err(Error::ToolExecution(
+                "transfer_type must be 1 (spot→futures) or 2 (futures→spot)".into(),
+            ));
+        }
+
+        let ts = binance_now_ms();
+        let params = format!(
+            "asset={}&amount={}&type={}&timestamp={}",
+            asset, amount, transfer_type, ts
+        );
+        let sig = binance_sign(&params, &secret);
+        // Transfer uses api.binance.com (not fapi) — it's a universal account endpoint
+        let base = if std::env::var("BINANCE_TESTNET")
+            .map(|v| v.to_ascii_lowercase() == "true")
+            .unwrap_or(false)
+        {
+            "https://testnet.binance.vision".to_string()
+        } else {
+            "https://api.binance.com".to_string()
+        };
+        let url = format!("{}/sapi/v1/futures/transfer", base);
+        let body = format!("{}&signature={}", params, sig);
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
+        let resp = client
+            .post(&url)
+            .header("X-MBX-APIKEY", &api_key)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
+        let status = resp.status();
+        let j: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!(
+                "Binance transfer {} — {}",
+                status,
+                j.get("msg").and_then(|v| v.as_str()).unwrap_or(&j.to_string())
+            )));
+        }
+        let direction = if transfer_type == 1 {
+            "spot → futures"
+        } else {
+            "futures → spot"
+        };
+        Ok(json!({
+            "transferred": true,
+            "asset": asset,
+            "amount": amount,
+            "direction": direction,
+            "tran_id": j["tranId"],
+        }))
+    }
+
+    pub async fn binance_futures_place_order(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BINANCE_API_KEY").map_err(|_| {
+            Error::ToolExecution(
+                "BINANCE_API_KEY env var not set. \
+                 This tool requires futures trading credentials."
+                    .into(),
+            )
+        })?;
+        let secret = std::env::var("BINANCE_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_SECRET env var not set.".into())
+        })?;
+
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let side = input
+            .get_string("side")
+            .ok_or_else(|| Error::ToolExecution("missing 'side' (BUY or SELL)".into()))?
+            .to_uppercase();
+        let order_type = input
+            .get_string("order_type")
+            .ok_or_else(|| Error::ToolExecution("missing 'order_type' (MARKET or LIMIT)".into()))?
+            .to_uppercase();
+        let quantity = input
+            .get_string("quantity")
+            .ok_or_else(|| Error::ToolExecution("missing 'quantity'".into()))?;
+        let price = input.get_string("price");
+        let position_side = input
+            .get_string("position_side")
+            .unwrap_or_else(|| "BOTH".into())
+            .to_uppercase();
+        let reduce_only = input
+            .get_bool("reduce_only")
+            .unwrap_or(false);
+        let tif = input
+            .get_string("time_in_force")
+            .unwrap_or_else(|| "GTC".into());
+
+        let ts = binance_now_ms();
+        let mut params = format!(
+            "symbol={}&side={}&type={}&quantity={}&positionSide={}&reduceOnly={}&timestamp={}",
+            symbol, side, order_type, quantity, position_side, reduce_only, ts
+        );
+        if order_type == "LIMIT" {
+            let p = price.as_ref().ok_or_else(|| {
+                Error::ToolExecution("LIMIT order requires 'price'".into())
+            })?;
+            params.push_str(&format!("&price={}&timeInForce={}", p, tif));
+        }
+
+        let sig = binance_sign(&params, &secret);
+        let url = format!("{}/fapi/v1/order", binance_futures_base());
+        let body = format!("{}&signature={}", params, sig);
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
+        let resp = client
+            .post(&url)
+            .header("X-MBX-APIKEY", &api_key)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
+        let status = resp.status();
+        let j: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!(
+                "Binance futures place order {} — {}",
+                status,
+                j.get("msg").and_then(|v| v.as_str()).unwrap_or(&j.to_string())
+            )));
+        }
+        Ok(json!({
+            "order_id":        j["orderId"],
+            "client_order_id": j["clientOrderId"],
+            "symbol":          j["symbol"],
+            "side":            j["side"],
+            "position_side":   j["positionSide"],
+            "type":            j["type"],
+            "status":          j["status"],
+            "price":           j["price"],
+            "avg_price":       j["avgPrice"],
+            "orig_qty":        j["origQty"],
+            "executed_qty":    j["executedQty"],
+            "reduce_only":     j["reduceOnly"],
+            "testnet": std::env::var("BINANCE_TESTNET")
+                .map(|v| v.to_ascii_lowercase() == "true")
+                .unwrap_or(false),
+        }))
+    }
+
+    pub async fn binance_futures_cancel_order(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BINANCE_API_KEY").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_KEY env var not set.".into())
+        })?;
+        let secret = std::env::var("BINANCE_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_SECRET env var not set.".into())
+        })?;
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let order_id = input
+            .get_number("order_id")
+            .ok_or_else(|| Error::ToolExecution("missing 'order_id'".into()))? as u64;
+
+        let ts = binance_now_ms();
+        let params = format!("symbol={}&orderId={}&timestamp={}", symbol, order_id, ts);
+        let sig = binance_sign(&params, &secret);
+        let url = format!(
+            "{}/fapi/v1/order?{}&signature={}",
+            binance_futures_base(),
+            params,
+            sig
+        );
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
+        let resp = client
+            .delete(&url)
+            .header("X-MBX-APIKEY", &api_key)
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
+        let status = resp.status();
+        let j: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!(
+                "Binance futures cancel {} — {}",
+                status,
+                j.get("msg").and_then(|v| v.as_str()).unwrap_or(&j.to_string())
+            )));
+        }
+        Ok(json!({ "cancelled": true, "order": j }))
+    }
+
+    pub async fn binance_set_leverage(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BINANCE_API_KEY").map_err(|_| {
+            Error::ToolExecution(
+                "BINANCE_API_KEY env var not set. \
+                 Required to set futures leverage."
+                    .into(),
+            )
+        })?;
+        let secret = std::env::var("BINANCE_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BINANCE_API_SECRET env var not set.".into())
+        })?;
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let leverage = input
+            .get_number("leverage")
+            .ok_or_else(|| Error::ToolExecution("missing 'leverage' (1–125)".into()))? as u32;
+        if leverage < 1 || leverage > 125 {
+            return Err(Error::ToolExecution(
+                "leverage must be between 1 and 125".into(),
+            ));
+        }
+
+        let ts = binance_now_ms();
+        let params = format!("symbol={}&leverage={}&timestamp={}", symbol, leverage, ts);
+        let sig = binance_sign(&params, &secret);
+        let url = format!("{}/fapi/v1/leverage", binance_futures_base());
+        let body = format!("{}&signature={}", params, sig);
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
+        let resp = client
+            .post(&url)
+            .header("X-MBX-APIKEY", &api_key)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
+        let status = resp.status();
+        let j: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!(
+                "Binance set leverage {} — {}",
+                status,
+                j.get("msg").and_then(|v| v.as_str()).unwrap_or(&j.to_string())
+            )));
+        }
+        Ok(json!({
+            "symbol":        j["symbol"],
+            "leverage":      j["leverage"],
+            "max_notional":  j["maxNotionalValue"],
+        }))
     }
 
     pub(super) fn urlencode(s: &str) -> String {
