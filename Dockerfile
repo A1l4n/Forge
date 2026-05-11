@@ -10,11 +10,20 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Cache deps separately so source-only edits don't rebuild the world.
+# BuildKit --mount=type=cache keeps the cargo registry and compiled deps
+# across ALL builds (even different tags) — no more 90-min dep recompiles.
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src && echo "fn main() {}" > src/main.rs && cargo build --release && rm -rf src
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/src/forge/target \
+    mkdir -p src && echo "fn main() {}" > src/main.rs \
+    && cargo build --release \
+    && rm -rf src
 
 COPY src ./src
-RUN touch src/main.rs && cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/src/forge/target \
+    touch src/main.rs && cargo build --release \
+    && cp target/release/forge /tmp/forge-bin
 
 # ---- runtime image ----
 FROM debian:bookworm-slim
@@ -28,7 +37,7 @@ RUN apt-get update \
       git \
  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/src/forge/target/release/forge /usr/local/bin/forge
+COPY --from=builder /tmp/forge-bin /usr/local/bin/forge
 
 # Persistent data lives at /data — Fly mounts a volume here.
 ENV FORGE_DB=/data/forge.db
