@@ -111,6 +111,7 @@ pub fn router(state: AppState) -> Router {
     // Public routes — never auth-checked.
     let public = Router::new()
         .route("/", get(index))
+        .route("/manifest.json", get(manifest))
         .route("/healthz", get(healthz))
         .route("/api/auth/check", get(auth_check));
 
@@ -213,6 +214,13 @@ async fn index() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         Html(webui::INDEX_HTML),
+    )
+}
+
+async fn manifest() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/manifest+json")],
+        webui::MANIFEST_JSON,
     )
 }
 

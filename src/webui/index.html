@@ -2,8 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Forge — Mission Control</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Luna">
+<meta name="theme-color" content="#0a0d10">
+<link rel="manifest" href="/manifest.json">
+<title>Luna — AI Assistant</title>
 <style>
   :root {
     --bg: #0a0d10;
@@ -767,15 +773,19 @@
     header { padding: 0 10px; gap: 8px; height: 48px; }
     .meta { gap: 6px; font-size: 10px; }
     .meta-item:nth-child(3) { display: none; }
-    nav.tabs button { padding: 5px 7px; font-size: 11px; }
+    nav.tabs button { padding: 8px 10px; font-size: 12px; min-height: 36px; }
     .brand::before { display: none; }
-    #chat { padding: 12px; }
+    #chat { padding: 10px 12px; }
     .composer { padding: 8px 10px; gap: 6px; }
-    .composer button { padding: 10px 12px; font-size: 12px; }
+    .composer textarea { font-size: 16px; /* prevent iOS zoom */ }
+    .composer button { padding: 12px 16px; font-size: 15px; min-width: 60px; min-height: 44px; }
+    .voice-btn { min-width: 44px; min-height: 44px; font-size: 18px; }
+    .msg .body { font-size: 15px; padding: 10px 12px; }
     .kanban-board { grid-template-columns: 1fr 1fr; }
     #view-kanban { padding: 10px; }
     #view-mission { padding: 10px; }
     .mc-grid { grid-template-columns: 1fr 1fr; }
+    .kpi-value { font-size: 22px; }
   }
 </style>
 </head>
@@ -784,8 +794,8 @@
   <!-- ═══════════════ LOGIN OVERLAY ═══════════════ -->
   <div id="login-overlay">
     <form id="login-card" onsubmit="submitLogin(event)">
-      <h1>⚒ FORGE</h1>
-      <p>Enter your access token. This is the value you set in <code>FORGE_AUTH_TOKEN</code> on the server (or <code>flyctl secrets set FORGE_AUTH_TOKEN=...</code>).</p>
+      <h1>🌙 LUNA</h1>
+      <p>Enter your access token to connect to Luna.</p>
       <div id="login-error">Wrong token — try again.</div>
       <input id="login-token" type="password" placeholder="Access token" autocomplete="current-password" autofocus>
       <button type="submit">Unlock</button>
@@ -794,11 +804,11 @@
 
   <!-- ═══════════════ HEADER ═══════════════ -->
   <header>
-    <div class="brand">⚒ FORGE</div>
+    <div class="brand">🌙 LUNA</div>
     <nav class="tabs">
       <button class="active" data-tab="chat">💬 Chat</button>
-      <button data-tab="kanban">📋 Kanban</button>
-      <button data-tab="mission">🛰 Mission Control</button>
+      <button data-tab="kanban">📋 Tasks</button>
+      <button data-tab="mission">🛰 Stats</button>
     </nav>
     <div class="meta">
       <div class="meta-item">Provider: <b id="m-provider">…</b></div>
@@ -828,7 +838,7 @@
     <section class="view active" id="view-chat">
       <div class="chat-main">
         <div id="chat">
-          <div class="empty">Type a message below to talk to Luna.</div>
+          <div class="empty">👋 Hi! I'm Luna. Ask me anything — market data, trades, research, or just chat.</div>
         </div>
         <form class="composer" onsubmit="send(event)">
           <button type="button" class="voice-btn" id="mic-btn" title="Hold to dictate (or tap to toggle)" onclick="toggleMic()">🎤</button>
