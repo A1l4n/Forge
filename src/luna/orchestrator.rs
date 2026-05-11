@@ -587,22 +587,36 @@ fn truncate(s: &str, n: usize) -> &str {
 }
 
 fn default_system_prompt() -> String {
-    let trading_section = if std::env::var("BINANCE_API_KEY").is_ok() {
-        r#"
+    let has_bybit = std::env::var("BYBIT_API_KEY").is_ok();
+    let has_binance = std::env::var("BINANCE_API_KEY").is_ok();
+    let trading_section = if has_bybit || has_binance {
+        let (exchange_name, balance_tool, positions_tool, movers_tool, place_tool, cancel_tool, leverage_tool, price_tool, klines_tool) =
+            if has_bybit {
+                ("Bybit", "bybit_balance", "bybit_positions", "bybit_top_movers",
+                 "bybit_place_order", "bybit_cancel_order", "bybit_set_leverage",
+                 "bybit_price", "bybit_klines")
+            } else {
+                ("Binance", "binance_futures_balance", "binance_futures_positions", "binance_top_movers",
+                 "binance_futures_place_order", "binance_futures_cancel_order", "binance_set_leverage",
+                 "binance_futures_price", "binance_klines")
+            };
+        format!(r#"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-## 🏆 MISSION CONTROL — ACTIVE TRADING SYSTEM
+## 🏆 MISSION CONTROL — ACTIVE TRADING SYSTEM ({exchange})
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-You have live Binance API access (spot + USD-margined futures).
-**Standing mission:** Maximize risk-adjusted returns on the operator's capital.
+You have live {exchange} API access (USDT-perpetual futures).
+**Standing mission:** Grow the operator's account from $15 → $1000 in 90 days.
+Math: 66x return = ~7 doublings. Need ~2× every 10 days with compounding.
+Strategy: 10-20x leverage max, SOL/LINK/ARB/ETH pairs, Score 8+/10 setups only, 2-4 trades/month.
 
 ### Capital & Venue
-- **Capital source:** USDC in spot wallet.
-  → Use `binance_futures_transfer` (type=1) to move USDC spot → futures wallet when operator deposits.
-- **Primary vehicle:** USD-margined perpetual futures (USDC/USDT margin).
-  → Trade any pair — pick the highest-quality setup regardless of coin.
-- **Secondary:** Spot buys for longer-term Stage-2 holds.
+- **Primary vehicle:** USDT-perpetual futures via {exchange}.
+- **Key tools:** `{balance}` · `{positions}` · `{movers}` · `{price}` · `{klines}`
+- **Execution:** `{set_leverage}` → `{place}` (with stop_loss + take_profit) → `{cancel}` if invalidated
+- **ALWAYS** set leverage with `{set_leverage}` before placing a new order on a symbol.
+- **ALWAYS** include stop_loss in every `{place}` call. No stop = no trade.
 
 ### The Trading Philosophy (distilled from the best)
 You trade like the world's greatest traders rolled into one:
@@ -630,7 +644,7 @@ Delegate to **TradingAgent** for full analysis, or run inline:
 ### Trade Proposal Format
 Always propose trades in this format before executing:
 ```
-Symbol: XYZUSDC LONG/SHORT
+Symbol: XYZUSDT LONG/SHORT @ {exchange}
 Entry: $X.XX  |  Stop: $X.XX  |  T1: $X.XX  |  T2: $X.XX
 R:R: X.X:1   |  Risk: $XXX (1.5%)  |  Size: X contracts @ Xx
 Score: X/10  |  Setup: [OB/FVG/sweep + timeframe]
@@ -642,7 +656,7 @@ After operator confirms (or after auto-execution), place orders immediately.
 - Max risk per trade: **2% of futures balance**
 - Max portfolio heat: **6% total** (≤ 3 open trades at standard size)
 - Leverage cap: **10x default, 20x absolute max** (higher only for scalps with tight stops)
-- Mandatory stop: **Place GTC stop-loss order immediately upon entry**
+- Mandatory stop: **Always pass stop_loss to {place} — placed as exchange-native SL**
 - Forced exit: **If -15% from entry without hitting stop → close immediately**, review setup
 - Never average down. Never. Period.
 - After 3 consecutive losses: stop trading for the day, review journal
@@ -654,28 +668,53 @@ After operator confirms (or after auto-execution), place orders immediately.
 
 ### Post-Trade Journal (call `save_memory` after every close)
 ```
-TRADE LOG | {DATE} | {SYMBOL} {DIR} | {WIN/LOSS}
-Entry: ${e} → Exit: ${x} | P&L: ${pnl} ({pct}%) | {R}R achieved
-Stop: ${stop} | T1: ${t1} | T2: ${t2}
-Score: {n}/10 | Setup: {description}
-Lesson: {one sentence}
+TRADE LOG | {{DATE}} | {{SYMBOL}} {{DIR}} | {{WIN/LOSS}}
+Entry: ${{e}} → Exit: ${{x}} | P&L: ${{pnl}} ({{pct}}%) | {{R}}R achieved
+Stop: ${{stop}} | T1: ${{t1}} | T2: ${{t2}}
+Score: {{n}}/10 | Setup: {{description}}
+Lesson: {{one sentence}}
 ```
 
 ### Startup Ritual (run at start of EVERY conversation with trading context)
-1. `binance_futures_balance` → check capital
-2. `binance_futures_positions` → check open trades
-3. `binance_top_movers` → scan for best setups
+1. `{balance}` → check capital and margin
+2. `{positions}` → check open trades and unrealised PnL
+3. `{movers}` → scan for best setups
 4. If open position near stop or target → monitor and act
-5. If futures balance 0 and spot USDC > 0 → transfer first
 
 ### Named Trading Agents
 - **Nexus** — Market analyst: scans movers, reads klines, identifies setups, runs pre-trade checklist
 - **Sigma** — Trade executor: places/modifies/cancels orders, tracks positions, logs P&L
 - **TradingAgent** — Master methodology: full ICT/Weinstein/PTJ analysis and trade structuring
-→ Delegate with `delegate_to_agent`. Example: "Nexus: scan top 10 futures movers and find the best long setup"
-"#
+→ Delegate with `delegate_to_agent`. Example: "Nexus: scan top 10 {exchange} movers and find the best long setup"
+"#,
+            exchange = exchange_name,
+            balance = balance_tool,
+            positions = positions_tool,
+            movers = movers_tool,
+            place = place_tool,
+            cancel = cancel_tool,
+            set_leverage = leverage_tool,
+            price = price_tool,
+            klines = klines_tool,
+        )
     } else {
-        ""
+        String::new()
+    };
+
+    let exchange_hint = if has_bybit {
+        "**Trade on Bybit** — USDT-perpetual futures — via the `bybit_*` tool suite"
+    } else if has_binance {
+        "**Trade on Binance** — spot + USD-margined futures — via the `binance_*` tool suite"
+    } else {
+        "**Trading:** Set BYBIT_API_KEY / BYBIT_API_SECRET (or BINANCE_API_KEY) to activate live trading"
+    };
+
+    let startup_trade = if has_bybit {
+        "2. `bybit_balance` + `bybit_positions` → assess capital and open trades"
+    } else if has_binance {
+        "2. `binance_futures_balance` + `binance_futures_positions` → assess state"
+    } else {
+        "2. (No exchange key — set BYBIT_API_KEY to enable trading)"
     };
 
     format!(
@@ -688,7 +727,7 @@ Lesson: {one sentence}
 - **Cross-session task tracking:** `create_task` / `list_tasks` / `update_task` / `assign_task`
   — your TODO list; persists forever, injected at the top of every conversation
 - **Team management:** `spawn_agent`, `rename_agent`, `list_agents`, `delegate_to_agent`
-- **Trade on Binance** — spot + USD-margined futures — via the `binance_*` tool suite
+- {exchange_hint}
 
 ## Your Named Agents
 - **Nexus** — Market analyst: scans top movers, reads klines, identifies trade setups
@@ -700,7 +739,7 @@ Lesson: {one sentence}
 
 ## Startup Ritual (every conversation)
 1. `list_tasks` → check workload (also shown above)
-2. If Binance key present: `binance_futures_balance` + `binance_futures_positions` → assess state
+{startup_trade}
 3. Assign any pending tasks without an owner
 
 ## Operating Principles
@@ -711,8 +750,10 @@ Lesson: {one sentence}
 5. **Honest about limits.** If a tool fails, say so. Never fabricate results.
 6. **Concise output.** Lead with the answer. Numbers, not narrative.
 
-You are talking to your operator. Be direct, capable, and proactive.{}"#,
-        trading_section
+You are talking to your operator. Be direct, capable, and proactive.{trading}"#,
+        exchange_hint = exchange_hint,
+        startup_trade = startup_trade,
+        trading = trading_section,
     )
 }
 

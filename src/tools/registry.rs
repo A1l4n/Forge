@@ -285,7 +285,7 @@ impl ToolRegistry {
     }
 
     /// Build the **full** toolkit: filesystem + execution + network +
-    /// self-modification + memory + team management + skills + wallet + binance.
+    /// self-modification + memory + team management + skills + wallet + binance + bybit.
     /// This is what Luna gets at startup. Requires a [`MemoryStore`] for the
     /// memory + team + skills tools.
     pub fn with_full_toolkit(memory: Arc<MemoryStore>) -> Self {
@@ -297,6 +297,7 @@ impl ToolRegistry {
         Self::register_wallet(&mut r);
         Self::register_binance(&mut r);
         Self::register_futures(&mut r);
+        Self::register_bybit(&mut r);
         r
     }
 
@@ -1849,6 +1850,250 @@ mod builtin {
         }))
     }
 
+    // ── Bybit registration ───────────────────────────────────────────────────
+
+    fn register_bybit(r: &mut Self) {
+        // ── Public endpoints (no auth) ──────────────────────────────────────
+        r.register_with(
+            Tool::new(
+                "bybit_price".into(),
+                "Get the current price and 24h stats for a Bybit USDT-perpetual pair \
+                 (e.g. SOLUSDT, BTCUSDT, ETHUSDT). No API key required."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Trading pair symbol, e.g. SOLUSDT, BTCUSDT, ETHUSDT."
+                        }
+                    },
+                    "required": ["symbol"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::bybit_price)),
+        );
+
+        r.register_with(
+            Tool::new(
+                "bybit_klines".into(),
+                "Get OHLCV candlestick data for a Bybit USDT-perpetual pair. \
+                 Useful for technical analysis — supports 1, 3, 5, 15, 30, 60, 120, 240, 360, 720, D, W, M intervals."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "E.g. SOLUSDT, BTCUSDT."
+                        },
+                        "interval": {
+                            "type": "string",
+                            "description": "Candle interval: 1, 5, 15, 30, 60, 240, D. Default: 60 (1h)."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Number of candles to return (max 200). Default: 50."
+                        }
+                    },
+                    "required": ["symbol"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::bybit_klines)),
+        );
+
+        r.register_with(
+            Tool::new(
+                "bybit_top_movers".into(),
+                "Get the top gaining and top losing USDT-perpetual coins on Bybit in the last 24h. \
+                 Useful for spotting momentum and volatility. No API key required."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Number of top/bottom movers to return per side. Default: 10."
+                        }
+                    }
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::bybit_top_movers)),
+        );
+
+        // ── Authenticated read-only endpoints ───────────────────────────────
+        r.register_with(
+            Tool::new(
+                "bybit_balance".into(),
+                "Get your Bybit unified account balance (USDT, BTC, ETH, etc.). \
+                 Requires BYBIT_API_KEY env var (read permission sufficient)."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "coin": {
+                            "type": "string",
+                            "description": "Optional: filter to a specific coin, e.g. USDT."
+                        }
+                    }
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::bybit_balance)),
+        );
+
+        r.register_with(
+            Tool::new(
+                "bybit_positions".into(),
+                "Get your open Bybit USDT-perpetual positions. \
+                 Shows unrealised PnL, leverage, liquidation price, etc. \
+                 Requires BYBIT_API_KEY and BYBIT_API_SECRET."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Optional: filter to a specific symbol, e.g. SOLUSDT."
+                        }
+                    }
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::bybit_positions)),
+        );
+
+        r.register_with(
+            Tool::new(
+                "bybit_open_orders".into(),
+                "List your currently open orders on Bybit USDT-perpetual. \
+                 Requires BYBIT_API_KEY and BYBIT_API_SECRET."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "Optional symbol filter, e.g. SOLUSDT."
+                        }
+                    }
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::bybit_open_orders)),
+        );
+
+        // ── Trade execution (Confirm tier — real money) ─────────────────────
+        r.register_tiered(
+            Tool::new(
+                "bybit_place_order".into(),
+                "Place a market or limit order on Bybit USDT-perpetual futures. \
+                 Requires BYBIT_API_KEY and BYBIT_API_SECRET with trade permission. \
+                 ⚠️  This executes a REAL trade with real money unless BYBIT_TESTNET=true is set. \
+                 Always state symbol, side, qty, stop_loss, take_profit before calling. \
+                 Use positionIdx=0 for one-way mode (default), 1=Buy hedge, 2=Sell hedge."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": {
+                            "type": "string",
+                            "description": "E.g. SOLUSDT, BTCUSDT."
+                        },
+                        "side": {
+                            "type": "string",
+                            "enum": ["Buy", "Sell"],
+                            "description": "Buy = long, Sell = short."
+                        },
+                        "order_type": {
+                            "type": "string",
+                            "enum": ["Market", "Limit"],
+                            "description": "Market fills immediately. Limit waits for price."
+                        },
+                        "qty": {
+                            "type": "string",
+                            "description": "Order quantity in contracts (e.g. '0.5' for 0.5 SOL)."
+                        },
+                        "price": {
+                            "type": "string",
+                            "description": "Limit price. Required for Limit orders."
+                        },
+                        "stop_loss": {
+                            "type": "string",
+                            "description": "Stop-loss price. STRONGLY recommended — always set this."
+                        },
+                        "take_profit": {
+                            "type": "string",
+                            "description": "Take-profit price. Recommended for T1 target."
+                        },
+                        "reduce_only": {
+                            "type": "boolean",
+                            "description": "If true, order only reduces an existing position. Default false."
+                        },
+                        "time_in_force": {
+                            "type": "string",
+                            "enum": ["GTC", "IOC", "FOK", "PostOnly"],
+                            "description": "GTC = Good Till Cancelled (default)."
+                        },
+                        "position_idx": {
+                            "type": "integer",
+                            "description": "0 = one-way mode (default). 1 = buy side hedge. 2 = sell side hedge."
+                        }
+                    },
+                    "required": ["symbol", "side", "order_type", "qty"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::bybit_place_order)),
+            Tier::Confirm,
+        );
+
+        r.register_tiered(
+            Tool::new(
+                "bybit_cancel_order".into(),
+                "Cancel an open Bybit order by order ID. \
+                 Requires BYBIT_API_KEY and BYBIT_API_SECRET."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string", "description": "E.g. SOLUSDT" },
+                        "order_id": {
+                            "type": "string",
+                            "description": "The orderId returned by bybit_place_order."
+                        }
+                    },
+                    "required": ["symbol", "order_id"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::bybit_cancel_order)),
+            Tier::Confirm,
+        );
+
+        r.register_tiered(
+            Tool::new(
+                "bybit_set_leverage".into(),
+                "Set the leverage for a Bybit USDT-perpetual symbol (1–100x). \
+                 Call this before placing an order if you need to change leverage. \
+                 Requires BYBIT_API_KEY and BYBIT_API_SECRET."
+                    .into(),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string", "description": "E.g. SOLUSDT" },
+                        "buy_leverage": {
+                            "type": "string",
+                            "description": "Leverage for buy side (e.g. '10'). In one-way mode, this sets both."
+                        },
+                        "sell_leverage": {
+                            "type": "string",
+                            "description": "Leverage for sell side (e.g. '10'). Usually same as buy_leverage."
+                        }
+                    },
+                    "required": ["symbol", "buy_leverage", "sell_leverage"]
+                }),
+            ),
+            Arc::new(FnExecutor(builtin::bybit_set_leverage)),
+            Tier::Confirm,
+        );
+    }
+
     // ── Binance helpers ──────────────────────────────────────────────────────
 
     fn binance_base() -> String {
@@ -2687,6 +2932,568 @@ mod builtin {
             "symbol":        j["symbol"],
             "leverage":      j["leverage"],
             "max_notional":  j["maxNotionalValue"],
+        }))
+    }
+
+    // ── Bybit V5 helpers ─────────────────────────────────────────────────────
+
+    fn bybit_base() -> String {
+        if std::env::var("BYBIT_TESTNET")
+            .map(|v| v.to_ascii_lowercase() == "true")
+            .unwrap_or(false)
+        {
+            "https://api-testnet.bybit.com".to_string()
+        } else {
+            "https://api.bybit.com".to_string()
+        }
+    }
+
+    fn bybit_sign(timestamp: u128, api_key: &str, recv_window: &str, payload: &str, secret: &str) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let param_str = format!("{}{}{}{}", timestamp, api_key, recv_window, payload);
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+            .expect("HMAC accepts any key length");
+        mac.update(param_str.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    fn bybit_now_ms() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    }
+
+    async fn bybit_public_get(url: &str) -> Result<Value> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("http client: {}", e)))?;
+        let resp = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
+        let status = resp.status();
+        let json: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!(
+                "Bybit API {} — {}",
+                status,
+                json.get("retMsg").and_then(|v| v.as_str()).unwrap_or(&json.to_string())
+            )));
+        }
+        if let Some(code) = json.get("retCode").and_then(|v| v.as_i64()) {
+            if code != 0 {
+                return Err(Error::ToolExecution(format!(
+                    "Bybit error {}: {}",
+                    code,
+                    json.get("retMsg").and_then(|v| v.as_str()).unwrap_or("unknown")
+                )));
+            }
+        }
+        Ok(json)
+    }
+
+    async fn bybit_auth_get(url: &str, query: &str, api_key: &str, secret: &str) -> Result<Value> {
+        let recv_window = "5000";
+        let ts = bybit_now_ms();
+        let sig = bybit_sign(ts, api_key, recv_window, query, secret);
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("http client: {}", e)))?;
+        let full_url = if query.is_empty() {
+            url.to_string()
+        } else {
+            format!("{}?{}", url, query)
+        };
+        let resp = client
+            .get(&full_url)
+            .header("X-BAPI-API-KEY", api_key)
+            .header("X-BAPI-SIGN", &sig)
+            .header("X-BAPI-TIMESTAMP", ts.to_string())
+            .header("X-BAPI-RECV-WINDOW", recv_window)
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
+        let status = resp.status();
+        let json: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!(
+                "Bybit API {} — {}",
+                status,
+                json.get("retMsg").and_then(|v| v.as_str()).unwrap_or(&json.to_string())
+            )));
+        }
+        if let Some(code) = json.get("retCode").and_then(|v| v.as_i64()) {
+            if code != 0 {
+                return Err(Error::ToolExecution(format!(
+                    "Bybit error {}: {}",
+                    code,
+                    json.get("retMsg").and_then(|v| v.as_str()).unwrap_or("unknown")
+                )));
+            }
+        }
+        Ok(json)
+    }
+
+    async fn bybit_auth_post(url: &str, body: &str, api_key: &str, secret: &str) -> Result<Value> {
+        let recv_window = "5000";
+        let ts = bybit_now_ms();
+        let sig = bybit_sign(ts, api_key, recv_window, body, secret);
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| Error::ToolExecution(format!("http client: {}", e)))?;
+        let resp = client
+            .post(url)
+            .header("X-BAPI-API-KEY", api_key)
+            .header("X-BAPI-SIGN", &sig)
+            .header("X-BAPI-TIMESTAMP", ts.to_string())
+            .header("X-BAPI-RECV-WINDOW", recv_window)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
+        let status = resp.status();
+        let json: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::ToolExecution(format!("decode: {}", e)))?;
+        if !status.is_success() {
+            return Err(Error::ToolExecution(format!(
+                "Bybit API {} — {}",
+                status,
+                json.get("retMsg").and_then(|v| v.as_str()).unwrap_or(&json.to_string())
+            )));
+        }
+        if let Some(code) = json.get("retCode").and_then(|v| v.as_i64()) {
+            if code != 0 {
+                return Err(Error::ToolExecution(format!(
+                    "Bybit error {}: {}",
+                    code,
+                    json.get("retMsg").and_then(|v| v.as_str()).unwrap_or("unknown")
+                )));
+            }
+        }
+        Ok(json)
+    }
+
+    // ── Bybit public tools ───────────────────────────────────────────────────
+
+    pub async fn bybit_price(input: ToolInput) -> Result<Value> {
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let url = format!(
+            "{}/v5/market/tickers?category=linear&symbol={}",
+            bybit_base(),
+            symbol
+        );
+        let j = bybit_public_get(&url).await?;
+        let list = j["result"]["list"]
+            .as_array()
+            .and_then(|a| a.first())
+            .cloned()
+            .unwrap_or(json!({}));
+        Ok(json!({
+            "symbol": symbol,
+            "last_price":          list["lastPrice"],
+            "mark_price":          list["markPrice"],
+            "index_price":         list["indexPrice"],
+            "prev_price24h":       list["prevPrice24h"],
+            "price_24h_pct":       list["price24hPcnt"],
+            "high_24h":            list["highPrice24h"],
+            "low_24h":             list["lowPrice24h"],
+            "volume_24h":          list["volume24h"],
+            "turnover_24h":        list["turnover24h"],
+            "open_interest":       list["openInterest"],
+            "funding_rate":        list["fundingRate"],
+            "next_funding_time":   list["nextFundingTime"],
+            "testnet": std::env::var("BYBIT_TESTNET")
+                .map(|v| v.to_ascii_lowercase() == "true")
+                .unwrap_or(false),
+        }))
+    }
+
+    pub async fn bybit_klines(input: ToolInput) -> Result<Value> {
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let interval = input.get_string("interval").unwrap_or_else(|| "60".into());
+        let limit = input
+            .get_number("limit")
+            .map(|n| (n as u32).min(200))
+            .unwrap_or(50);
+        let url = format!(
+            "{}/v5/market/kline?category=linear&symbol={}&interval={}&limit={}",
+            bybit_base(),
+            symbol,
+            interval,
+            limit
+        );
+        let j = bybit_public_get(&url).await?;
+        let candles: Vec<Value> = j["result"]["list"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|k| {
+                let a = k.as_array().unwrap();
+                json!({
+                    "time_ms": a[0],
+                    "open":    a[1],
+                    "high":    a[2],
+                    "low":     a[3],
+                    "close":   a[4],
+                    "volume":  a[5],
+                    "turnover": a.get(6).cloned().unwrap_or(json!(null)),
+                })
+            })
+            .collect();
+        Ok(json!({
+            "symbol":   symbol,
+            "interval": interval,
+            "candles":  candles,
+        }))
+    }
+
+    pub async fn bybit_top_movers(input: ToolInput) -> Result<Value> {
+        let limit = input
+            .get_number("limit")
+            .map(|n| n as usize)
+            .unwrap_or(10)
+            .min(50);
+        let url = format!("{}/v5/market/tickers?category=linear", bybit_base());
+        let j = bybit_public_get(&url).await?;
+        let list = j["result"]["list"].as_array().cloned().unwrap_or_default();
+
+        let mut pairs: Vec<(f64, &Value)> = list
+            .iter()
+            .filter_map(|t| {
+                let pct = t["price24hPcnt"]
+                    .as_str()
+                    .and_then(|s| s.parse::<f64>().ok())?;
+                Some((pct, t))
+            })
+            .collect();
+        pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let gainers: Vec<Value> = pairs
+            .iter()
+            .take(limit)
+            .map(|(pct, t)| json!({
+                "symbol": t["symbol"],
+                "last_price": t["lastPrice"],
+                "change_24h_pct": format!("{:.2}%", pct * 100.0),
+                "volume_24h": t["volume24h"],
+            }))
+            .collect();
+
+        let losers: Vec<Value> = pairs
+            .iter()
+            .rev()
+            .take(limit)
+            .map(|(pct, t)| json!({
+                "symbol": t["symbol"],
+                "last_price": t["lastPrice"],
+                "change_24h_pct": format!("{:.2}%", pct * 100.0),
+                "volume_24h": t["volume24h"],
+            }))
+            .collect();
+
+        Ok(json!({
+            "gainers": gainers,
+            "losers":  losers,
+            "total_pairs": list.len(),
+        }))
+    }
+
+    // ── Bybit authenticated tools ────────────────────────────────────────────
+
+    pub async fn bybit_balance(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BYBIT_API_KEY").map_err(|_| {
+            Error::ToolExecution(
+                "BYBIT_API_KEY env var not set. \
+                 Add it to your environment to check balances."
+                    .into(),
+            )
+        })?;
+        let secret = std::env::var("BYBIT_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BYBIT_API_SECRET env var not set.".into())
+        })?;
+        let coin_filter = input.get_string("coin");
+        let mut query = "accountType=UNIFIED".to_string();
+        if let Some(ref c) = coin_filter {
+            query.push_str(&format!("&coin={}", c.to_uppercase()));
+        }
+        let url = format!("{}/v5/account/wallet-balance", bybit_base());
+        let j = bybit_auth_get(&url, &query, &api_key, &secret).await?;
+        let coins: Vec<Value> = j["result"]["list"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .flat_map(|account| {
+                account["coin"]
+                    .as_array()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .map(|c| json!({
+                        "coin":             c["coin"],
+                        "wallet_balance":   c["walletBalance"],
+                        "available_to_withdraw": c["availableToWithdraw"],
+                        "unrealised_pnl":   c["unrealisedPnl"],
+                        "usd_value":        c["usdValue"],
+                    }))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        Ok(json!({
+            "balances": coins,
+            "testnet": std::env::var("BYBIT_TESTNET")
+                .map(|v| v.to_ascii_lowercase() == "true")
+                .unwrap_or(false),
+        }))
+    }
+
+    pub async fn bybit_positions(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BYBIT_API_KEY").map_err(|_| {
+            Error::ToolExecution("BYBIT_API_KEY env var not set.".into())
+        })?;
+        let secret = std::env::var("BYBIT_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BYBIT_API_SECRET env var not set.".into())
+        })?;
+        let symbol = input.get_string("symbol").map(|s| s.to_uppercase());
+        let mut query = "category=linear&settleCoin=USDT".to_string();
+        if let Some(ref sym) = symbol {
+            query.push_str(&format!("&symbol={}", sym));
+        }
+        let url = format!("{}/v5/position/list", bybit_base());
+        let j = bybit_auth_get(&url, &query, &api_key, &secret).await?;
+        let positions: Vec<Value> = j["result"]["list"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter(|p| {
+                p["size"].as_str().map(|s| s != "0").unwrap_or(false)
+            })
+            .map(|p| json!({
+                "symbol":            p["symbol"],
+                "side":              p["side"],
+                "size":              p["size"],
+                "avg_price":         p["avgPrice"],
+                "mark_price":        p["markPrice"],
+                "leverage":          p["leverage"],
+                "unrealised_pnl":    p["unrealisedPnl"],
+                "realised_pnl":      p["cumRealisedPnl"],
+                "liquidation_price": p["liqPrice"],
+                "stop_loss":         p["stopLoss"],
+                "take_profit":       p["takeProfit"],
+                "position_idx":      p["positionIdx"],
+                "created_time":      p["createdTime"],
+                "updated_time":      p["updatedTime"],
+            }))
+            .collect();
+        let count = positions.len();
+        Ok(json!({
+            "positions": positions,
+            "count": count,
+            "testnet": std::env::var("BYBIT_TESTNET")
+                .map(|v| v.to_ascii_lowercase() == "true")
+                .unwrap_or(false),
+        }))
+    }
+
+    pub async fn bybit_open_orders(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BYBIT_API_KEY").map_err(|_| {
+            Error::ToolExecution("BYBIT_API_KEY env var not set.".into())
+        })?;
+        let secret = std::env::var("BYBIT_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BYBIT_API_SECRET env var not set.".into())
+        })?;
+        let symbol = input.get_string("symbol").map(|s| s.to_uppercase());
+        let mut query = "category=linear".to_string();
+        if let Some(ref sym) = symbol {
+            query.push_str(&format!("&symbol={}", sym));
+        } else {
+            query.push_str("&settleCoin=USDT");
+        }
+        let url = format!("{}/v5/order/realtime", bybit_base());
+        let j = bybit_auth_get(&url, &query, &api_key, &secret).await?;
+        let orders: Vec<Value> = j["result"]["list"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|o| json!({
+                "order_id":    o["orderId"],
+                "symbol":      o["symbol"],
+                "side":        o["side"],
+                "order_type":  o["orderType"],
+                "qty":         o["qty"],
+                "price":       o["price"],
+                "stop_loss":   o["stopLoss"],
+                "take_profit": o["takeProfit"],
+                "status":      o["orderStatus"],
+                "created_time": o["createdTime"],
+            }))
+            .collect();
+        let count = orders.len();
+        Ok(json!({ "orders": orders, "count": count }))
+    }
+
+    pub async fn bybit_place_order(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BYBIT_API_KEY").map_err(|_| {
+            Error::ToolExecution(
+                "BYBIT_API_KEY env var not set. \
+                 This tool requires trading credentials."
+                    .into(),
+            )
+        })?;
+        let secret = std::env::var("BYBIT_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BYBIT_API_SECRET env var not set.".into())
+        })?;
+
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let side = input
+            .get_string("side")
+            .ok_or_else(|| Error::ToolExecution("missing 'side' (Buy or Sell)".into()))?;
+        // Normalize side: accept both "buy/sell" and "Buy/Sell"
+        let side = {
+            let s = side.to_lowercase();
+            if s == "buy" { "Buy".to_string() } else { "Sell".to_string() }
+        };
+        let order_type = input
+            .get_string("order_type")
+            .unwrap_or_else(|| "Market".into());
+        let order_type = {
+            let t = order_type.to_lowercase();
+            if t == "limit" { "Limit".to_string() } else { "Market".to_string() }
+        };
+        let qty = input
+            .get_string("qty")
+            .ok_or_else(|| Error::ToolExecution("missing 'qty'".into()))?;
+        let price = input.get_string("price");
+        let stop_loss = input.get_string("stop_loss");
+        let take_profit = input.get_string("take_profit");
+        let reduce_only = input.get_bool("reduce_only").unwrap_or(false);
+        let tif = input.get_string("time_in_force").unwrap_or_else(|| "GTC".into());
+        let position_idx = input.get_number("position_idx").unwrap_or(0.0) as u8;
+
+        let mut body_map = serde_json::Map::new();
+        body_map.insert("category".into(), json!("linear"));
+        body_map.insert("symbol".into(), json!(symbol));
+        body_map.insert("side".into(), json!(side));
+        body_map.insert("orderType".into(), json!(order_type));
+        body_map.insert("qty".into(), json!(qty));
+        body_map.insert("positionIdx".into(), json!(position_idx));
+        body_map.insert("reduceOnly".into(), json!(reduce_only));
+        body_map.insert("timeInForce".into(), json!(tif));
+        if let Some(ref p) = price {
+            body_map.insert("price".into(), json!(p));
+        }
+        if let Some(ref sl) = stop_loss {
+            body_map.insert("stopLoss".into(), json!(sl));
+        }
+        if let Some(ref tp) = take_profit {
+            body_map.insert("takeProfit".into(), json!(tp));
+        }
+
+        let body = serde_json::to_string(&body_map)
+            .map_err(|e| Error::ToolExecution(format!("json encode: {}", e)))?;
+        let url = format!("{}/v5/order/create", bybit_base());
+        let j = bybit_auth_post(&url, &body, &api_key, &secret).await?;
+        Ok(json!({
+            "order_id":        j["result"]["orderId"],
+            "order_link_id":   j["result"]["orderLinkId"],
+            "symbol":          symbol,
+            "side":            side,
+            "order_type":      order_type,
+            "qty":             qty,
+            "stop_loss":       stop_loss,
+            "take_profit":     take_profit,
+            "testnet": std::env::var("BYBIT_TESTNET")
+                .map(|v| v.to_ascii_lowercase() == "true")
+                .unwrap_or(false),
+        }))
+    }
+
+    pub async fn bybit_cancel_order(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BYBIT_API_KEY").map_err(|_| {
+            Error::ToolExecution("BYBIT_API_KEY env var not set.".into())
+        })?;
+        let secret = std::env::var("BYBIT_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BYBIT_API_SECRET env var not set.".into())
+        })?;
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let order_id = input
+            .get_string("order_id")
+            .ok_or_else(|| Error::ToolExecution("missing 'order_id'".into()))?;
+
+        let body = serde_json::to_string(&json!({
+            "category": "linear",
+            "symbol":   symbol,
+            "orderId":  order_id,
+        }))
+        .map_err(|e| Error::ToolExecution(format!("json encode: {}", e)))?;
+        let url = format!("{}/v5/order/cancel", bybit_base());
+        let j = bybit_auth_post(&url, &body, &api_key, &secret).await?;
+        Ok(json!({
+            "cancelled": true,
+            "order_id":  j["result"]["orderId"],
+            "symbol":    symbol,
+        }))
+    }
+
+    pub async fn bybit_set_leverage(input: ToolInput) -> Result<Value> {
+        let api_key = std::env::var("BYBIT_API_KEY").map_err(|_| {
+            Error::ToolExecution("BYBIT_API_KEY env var not set.".into())
+        })?;
+        let secret = std::env::var("BYBIT_API_SECRET").map_err(|_| {
+            Error::ToolExecution("BYBIT_API_SECRET env var not set.".into())
+        })?;
+        let symbol = input
+            .get_string("symbol")
+            .ok_or_else(|| Error::ToolExecution("missing 'symbol'".into()))?
+            .to_uppercase();
+        let buy_leverage = input
+            .get_string("buy_leverage")
+            .ok_or_else(|| Error::ToolExecution("missing 'buy_leverage'".into()))?;
+        let sell_leverage = input
+            .get_string("sell_leverage")
+            .unwrap_or_else(|| buy_leverage.clone());
+
+        let body = serde_json::to_string(&json!({
+            "category":    "linear",
+            "symbol":      symbol,
+            "buyLeverage":  buy_leverage,
+            "sellLeverage": sell_leverage,
+        }))
+        .map_err(|e| Error::ToolExecution(format!("json encode: {}", e)))?;
+        let url = format!("{}/v5/position/set-leverage", bybit_base());
+        let j = bybit_auth_post(&url, &body, &api_key, &secret).await?;
+        Ok(json!({
+            "symbol":        symbol,
+            "buy_leverage":  buy_leverage,
+            "sell_leverage": sell_leverage,
+            "ret_code":      j["retCode"],
+            "ret_msg":       j["retMsg"],
         }))
     }
 
