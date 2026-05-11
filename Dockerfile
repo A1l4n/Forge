@@ -37,7 +37,15 @@ RUN mkdir -p /data
 EXPOSE 8080
 
 # Default: serve on 0.0.0.0:8080. The container reads:
-#   FORGE_AUTH_TOKEN  — required (or you'll get a public Luna, don't do that)
-#   GROQ_API_KEY (or any other backend's key) — required
-# Both are set on Fly via `flyctl secrets set ...`.
-CMD ["forge", "--db", "/data/forge.db", "--backend", "groq", "serve", "--host", "0.0.0.0", "--port", "8080"]
+#   FORGE_AUTH_TOKEN  — required (protects the endpoint)
+#   FORGE_BACKEND     — which LLM to use (default: groq)
+#                       options: groq, gemini, sambanova, pollinations,
+#                                deepseek, xai, cerebras, nvidia, hyperbolic
+#   <BACKEND>_API_KEY — matching key (pollinations needs none)
+#   BINANCE_API_KEY / BINANCE_API_SECRET — Binance trading tools
+#   BINANCE_TESTNET=true — paper-trade mode (strongly recommended first)
+
+# Shell form lets Docker expand $FORGE_BACKEND at container start time,
+# so you can change the backend by updating the env var — no rebuild needed.
+ENV FORGE_BACKEND=groq
+CMD forge --db /data/forge.db --backend ${FORGE_BACKEND} serve --host 0.0.0.0 --port 8080

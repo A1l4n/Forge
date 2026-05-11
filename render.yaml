@@ -5,13 +5,20 @@
 #   1. Sign up at render.com — free, no credit card needed.
 #   2. Click "New +" → "Web Service" → connect your GitHub.
 #   3. Pick the A1l4n/Forge repo. Render auto-detects this file.
-#   4. On the Environment tab BEFORE deploying, add the two secrets:
-#        FORGE_AUTH_TOKEN = (the token I generated)
-#        GROQ_API_KEY     = (your Groq key)
+#   4. On the Environment tab BEFORE deploying, add secrets (see envVars below).
 #   5. Click "Create Web Service".
 #
 # After deploy: Render gives you https://forge-luna.onrender.com (or whatever
 # you named it). Open it, paste the auth token once, you're in.
+#
+# Backend selection via FORGE_BACKEND env var (no rebuild needed):
+#   groq          → GROQ_API_KEY           (free, 100k tokens/day)
+#   gemini        → GEMINI_API_KEY         (free tier, generous limits)
+#   sambanova     → SAMBANOVA_API_KEY      (free, fast inference)
+#   pollinations  → (no key required!)     (completely free)
+#   deepseek      → DEEPSEEK_API_KEY
+#   xai           → XAI_API_KEY
+#   cerebras      → CEREBRAS_API_KEY
 #
 # Free-tier caveats:
 # - 512 MB RAM (tight for Rust release builds; if it OOMs during build,
@@ -21,9 +28,13 @@
 # - No persistent disk → /app is ephemeral. Luna's SQLite db lives at
 #   /data/forge.db (Dockerfile sets that), but on free tier that wipes
 #   on every restart. Memories WILL be lost on each cold start.
-#   To keep memory across restarts: upgrade to a Render disk ($1/mo for
-#   1 GB), or move to Hugging Face Spaces, or run on your laptop via
-#   cloudflared.
+#   To keep memory across restarts: upgrade to a Render disk ($1/mo for 1 GB).
+#
+# Binance notes:
+# - Set BINANCE_TESTNET=true to paper-trade (strongly recommended first).
+# - Render uses shared outbound IPs (74.220.51.x / 74.220.59.x) — you CANNOT
+#   whitelist a single IP on Binance. For production trading with IP restriction,
+#   deploy to Oracle Cloud Always Free instead (static IP, free forever).
 
 services:
   - type: web
@@ -38,7 +49,19 @@ services:
     envVars:
       - key: RUST_LOG
         value: info
+      - key: FORGE_BACKEND
+        value: groq             # change to: gemini, sambanova, pollinations, etc.
       - key: FORGE_AUTH_TOKEN
         sync: false            # set in Render dashboard, never commit
       - key: GROQ_API_KEY
-        sync: false            # set in Render dashboard, never commit
+        sync: false            # groq.com free tier
+      - key: GEMINI_API_KEY
+        sync: false            # aistudio.google.com/apikey  (free)
+      - key: SAMBANOVA_API_KEY
+        sync: false            # cloud.sambanova.ai (free)
+      - key: BINANCE_API_KEY
+        sync: false            # binance.com → API Management
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: BINANCE_TESTNET
+        value: "false"         # set to "true" to paper-trade safely first
