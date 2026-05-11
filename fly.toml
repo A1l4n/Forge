@@ -22,8 +22,8 @@
 # paste the FORGE_AUTH_TOKEN once, and you're in. The URL is publicly
 # routable but useless without the token.
 
-app = "forge-luna"      # change this — must be globally unique on fly.io
-primary_region = "iad"  # change to your nearest region: lax, ord, fra, syd, etc.
+app = "luna-forge-eu"     # globally unique — EU deployment for Binance access
+primary_region = "ams"   # Amsterdam — outside US, Binance.com accessible
 
 [build]
   dockerfile = "Dockerfile"
@@ -47,9 +47,9 @@ primary_region = "iad"  # change to your nearest region: lax, ord, fra, syd, etc
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = false   # Always-on — Luna monitors trades continuously
   auto_start_machines = true
-  min_machines_running = 0   # set to 1 to keep her always warm
+  min_machines_running = 1     # Keep warm for Binance monitoring
 
   [http_service.concurrency]
     type = "requests"
