@@ -1,0 +1,17 @@
+name = "bybit-proxy"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+# Use workers.dev subdomain (free)
+workers_dev = true
+
+# Optional: force EU routing so requests exit from EU IPs
+# Uncomment for Bybit access (EU accounts) — requires Workers Paid plan for smart routing
+# [env.production]
+# routes = [{ pattern = "bybit-proxy.yourdomain.com", zone_name = "yourdomain.com" }]
+
+[vars]
+# BYBIT_TESTNET = "false"   # uncomment and set to "true" for testnet
+
+# Secrets (set via: wrangler secret put PROXY_SECRET)
+# PROXY_SECRET — protects the proxy from public use

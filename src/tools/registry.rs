@@ -2938,6 +2938,13 @@ mod builtin {
     // ── Bybit V5 helpers ─────────────────────────────────────────────────────
 
     fn bybit_base() -> String {
+        // If a Cloudflare Worker proxy URL is set, route through it to bypass
+        // GCP US geo-blocks. The Worker accepts /v5/* and forwards to api.bybit.com.
+        if let Ok(proxy) = std::env::var("BYBIT_PROXY_URL") {
+            if !proxy.trim().is_empty() {
+                return proxy.trim_end_matches('/').to_string();
+            }
+        }
         if std::env::var("BYBIT_TESTNET")
             .map(|v| v.to_ascii_lowercase() == "true")
             .unwrap_or(false)
@@ -2946,6 +2953,10 @@ mod builtin {
         } else {
             "https://api.bybit.com".to_string()
         }
+    }
+
+    fn bybit_proxy_secret() -> Option<String> {
+        std::env::var("BYBIT_PROXY_SECRET").ok().filter(|s| !s.trim().is_empty())
     }
 
     fn bybit_sign(timestamp: u128, api_key: &str, recv_window: &str, payload: &str, secret: &str) -> String {
@@ -2971,8 +2982,11 @@ mod builtin {
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| Error::ToolExecution(format!("http client: {}", e)))?;
-        let resp = client
-            .get(url)
+        let mut req = client.get(url);
+        if let Some(secret) = bybit_proxy_secret() {
+            req = req.header("X-Proxy-Secret", secret);
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
@@ -3013,12 +3027,16 @@ mod builtin {
         } else {
             format!("{}?{}", url, query)
         };
-        let resp = client
+        let mut req = client
             .get(&full_url)
             .header("X-BAPI-API-KEY", api_key)
             .header("X-BAPI-SIGN", &sig)
             .header("X-BAPI-TIMESTAMP", ts.to_string())
-            .header("X-BAPI-RECV-WINDOW", recv_window)
+            .header("X-BAPI-RECV-WINDOW", recv_window);
+        if let Some(secret) = bybit_proxy_secret() {
+            req = req.header("X-Proxy-Secret", secret);
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
@@ -3054,14 +3072,18 @@ mod builtin {
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| Error::ToolExecution(format!("http client: {}", e)))?;
-        let resp = client
+        let mut req = client
             .post(url)
             .header("X-BAPI-API-KEY", api_key)
             .header("X-BAPI-SIGN", &sig)
             .header("X-BAPI-TIMESTAMP", ts.to_string())
             .header("X-BAPI-RECV-WINDOW", recv_window)
             .header("Content-Type", "application/json")
-            .body(body.to_string())
+            .body(body.to_string());
+        if let Some(proxy_secret) = bybit_proxy_secret() {
+            req = req.header("X-Proxy-Secret", proxy_secret);
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
