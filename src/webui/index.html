@@ -1070,13 +1070,13 @@
 
       <!-- Trading Quick Actions -->
       <div class="trade-quick-bar">
-        <button onclick="quickSend('Check my Bybit balance and open positions — show USDT available, unrealised PnL on each position, and whether any are near stop or target')">💰 Balance</button>
-        <button onclick="quickSend('Scan top 20 Bybit USDT-perpetual movers right now and identify the 3 best setups using Weinstein stage + ICT order blocks + liquidity. Score each 1-10.')">🔍 Scan Markets</button>
-        <button onclick="quickSend('Run the full 10-step pre-trade checklist for current market conditions on Bybit')">✅ Pre-Trade Check</button>
-        <button onclick="quickSend('What are my open Bybit positions? Show entry, current P&L, stop, target, and whether I should hold, trail stop, or close')">📈 Open Positions</button>
-        <button class="ok-btn" onclick="quickSend('Find the single highest-quality trade setup on Bybit right now — long or short on SOL, LINK, ARB, ETH, or BTC. Use Weinstein stage + ICT order blocks + liquidity. Score it 1-10. Show the full trade proposal box.')">⚡ Best Setup</button>
+        <button onclick="quickSend('Check my Binance futures balance and open positions — show USDT available, unrealised PnL on each position, and whether any are near stop or target')">💰 Balance</button>
+        <button onclick="quickSend('Scan top 20 Binance USDT-perpetual movers right now and identify the 3 best setups using Weinstein stage + ICT order blocks + liquidity. Score each 1-10.')">🔍 Scan Markets</button>
+        <button onclick="quickSend('Run the full 10-step pre-trade checklist for current market conditions on Binance Futures')">✅ Pre-Trade Check</button>
+        <button onclick="quickSend('What are my open Binance futures positions? Show entry, current P&L, stop, target, and whether I should hold, trail stop, or close')">📈 Open Positions</button>
+        <button class="ok-btn" onclick="quickSend('Find the single highest-quality trade setup on Binance Futures right now — long or short on SOL, LINK, ARB, ETH, or BTC. Use Weinstein stage + ICT order blocks + liquidity. Score it 1-10. Show the full trade proposal box.')">⚡ Best Setup</button>
         <button onclick="quickSend('Show my trading journal — list all recent trade logs from memory with results and lessons learned')">📓 Trade Journal</button>
-        <button class="danger" onclick="quickSend('Show total portfolio risk right now: USDT at risk across all open Bybit positions, total portfolio heat %, leverage used, and whether I need to reduce exposure')">⚠️ Risk Check</button>
+        <button class="danger" onclick="quickSend('Show total portfolio risk right now: USDT at risk across all open Binance futures positions, total portfolio heat %, leverage used, and whether I need to reduce exposure')">⚠️ Risk Check</button>
       </div>
 
       <!-- Pre-Trade Checklist (manual tracker) -->
@@ -1124,31 +1124,31 @@
       <div class="watchlist-panel">
         <div class="watchlist-header">
           <h4>👀 Watchlist — click to analyze</h4>
-          <button class="btn" style="font-size:11px;padding:4px 10px;" onclick="quickSend('Update my Bybit watchlist — scan these USDT-perp pairs and give a quick 1-line setup status for each: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, LINKUSDT, AVAXUSDT, ARBUSDT, SUIUSDT')">Update</button>
+          <button class="btn" style="font-size:11px;padding:4px 10px;" onclick="quickSend('Update my Binance watchlist — scan these USDT-perp pairs and give a quick 1-line setup status for each: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, LINKUSDT, AVAXUSDT, ARBUSDT, SUIUSDT')">Update</button>
         </div>
         <div class="watchlist-coins">
-          <div class="coin-chip" onclick="quickSend('Analyze BTCUSDT on Bybit for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+          <div class="coin-chip" onclick="quickSend('Analyze BTCUSDT on Binance Futures for a trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
             BTC <span class="change" id="wl-btc">…</span>
           </div>
-          <div class="coin-chip" onclick="quickSend('Analyze ETHUSDT on Bybit for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+          <div class="coin-chip" onclick="quickSend('Analyze ETHUSDT on Binance Futures for a trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
             ETH <span class="change" id="wl-eth">…</span>
           </div>
-          <div class="coin-chip" onclick="quickSend('Analyze SOLUSDT on Bybit for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+          <div class="coin-chip" onclick="quickSend('Analyze SOLUSDT on Binance Futures for a trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
             SOL <span class="change" id="wl-sol">…</span>
           </div>
-          <div class="coin-chip" onclick="quickSend('Analyze BNBUSDT on Bybit for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+          <div class="coin-chip" onclick="quickSend('Analyze BNBUSDT on Binance Futures for a trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
             BNB <span class="change" id="wl-bnb">…</span>
           </div>
-          <div class="coin-chip" onclick="quickSend('Analyze LINKUSDT on Bybit for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+          <div class="coin-chip" onclick="quickSend('Analyze LINKUSDT on Binance Futures for a trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
             LINK <span class="change" id="wl-link">…</span>
           </div>
-          <div class="coin-chip" onclick="quickSend('Analyze AVAXUSDT on Bybit for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+          <div class="coin-chip" onclick="quickSend('Analyze AVAXUSDT on Binance Futures for a trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
             AVAX <span class="change" id="wl-avax">…</span>
           </div>
-          <div class="coin-chip" onclick="quickSend('Analyze ARBUSDT on Bybit for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+          <div class="coin-chip" onclick="quickSend('Analyze ARBUSDT on Binance Futures for a trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
             ARB <span class="change" id="wl-arb">…</span>
           </div>
-          <div class="coin-chip" onclick="quickSend('Analyze SUIUSDT on Bybit for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+          <div class="coin-chip" onclick="quickSend('Analyze SUIUSDT on Binance Futures for a trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
             SUI <span class="change" id="wl-sui">…</span>
           </div>
         </div>
