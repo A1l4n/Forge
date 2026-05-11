@@ -10,6 +10,14 @@
 //!   --backend glm           (FREE glm-4-flash, needs GLM_API_KEY from bigmodel.cn)
 //!   --backend mistral       (free tier, needs MISTRAL_API_KEY)
 //!   --backend cerebras      (free tier, needs CEREBRAS_API_KEY)
+//!   --backend deepseek      (cheap + free credits, needs DEEPSEEK_API_KEY)
+//!   --backend sambanova     (generous free tier, needs SAMBANOVA_API_KEY)
+//!   --backend gemini        (free tier 15 RPM 1M TPD, needs GEMINI_API_KEY)
+//!   --backend github        (free with GitHub account, needs GITHUB_TOKEN)
+//!   --backend nvidia        (free credits, needs NVIDIA_API_KEY from build.nvidia.com)
+//!   --backend hyperbolic    (free tier, needs HYPERBOLIC_API_KEY)
+//!   --backend xai           (free with X Premium, needs XAI_API_KEY)
+//!   --backend pollinations  (FREE, NO KEY required — public inference)
 //!   --backend together      (paid + $1 free, needs TOGETHER_API_KEY)
 //!   --backend lm-studio     (free, local LM Studio at localhost:1234)
 //!   --backend openai        (paid, needs OPENAI_API_KEY)
@@ -127,6 +135,14 @@ enum Backend {
     Glm,
     Mistral,
     Cerebras,
+    Deepseek,
+    Sambanova,
+    Gemini,
+    Github,
+    Nvidia,
+    Hyperbolic,
+    Xai,
+    Pollinations,
     #[value(name = "lm-studio")]
     LmStudio,
     Openai,
@@ -145,6 +161,14 @@ impl Backend {
             Backend::Glm => "glm-4-flash",
             Backend::Mistral => "mistral-small-latest",
             Backend::Cerebras => "llama3.1-70b",
+            Backend::Deepseek => "deepseek-chat",
+            Backend::Sambanova => "Meta-Llama-3.3-70B-Instruct",
+            Backend::Gemini => "gemini-2.0-flash",
+            Backend::Github => "gpt-4o-mini",
+            Backend::Nvidia => "meta/llama-3.3-70b-instruct",
+            Backend::Hyperbolic => "meta-llama/Llama-3.3-70B-Instruct",
+            Backend::Xai => "grok-2-latest",
+            Backend::Pollinations => "openai",
             Backend::LmStudio => "local-model",
             Backend::Openai => "gpt-4o-mini",
             Backend::Together => "meta-llama/Llama-3.3-70B-Instruct-Turbo",
@@ -165,10 +189,17 @@ fn pick_api_key(backend: Backend, explicit: Option<String>) -> Option<String> {
         Backend::Glm => &["GLM_API_KEY", "ZHIPU_API_KEY"],
         Backend::Mistral => &["MISTRAL_API_KEY"],
         Backend::Cerebras => &["CEREBRAS_API_KEY"],
+        Backend::Deepseek => &["DEEPSEEK_API_KEY"],
+        Backend::Sambanova => &["SAMBANOVA_API_KEY"],
+        Backend::Gemini => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        Backend::Github => &["GITHUB_TOKEN", "GITHUB_MODELS_TOKEN"],
+        Backend::Nvidia => &["NVIDIA_API_KEY", "NIM_API_KEY"],
+        Backend::Hyperbolic => &["HYPERBOLIC_API_KEY"],
+        Backend::Xai => &["XAI_API_KEY", "GROK_API_KEY"],
         Backend::Openai => &["OPENAI_API_KEY"],
         Backend::Together => &["TOGETHER_API_KEY", "TOGETHERAI_API_KEY"],
         Backend::Custom => &["FORGE_API_KEY"],
-        Backend::Ollama | Backend::LmStudio => &[],
+        Backend::Ollama | Backend::LmStudio | Backend::Pollinations => &[],
     };
     for var in candidates {
         if let Ok(v) = std::env::var(var) {
@@ -217,6 +248,35 @@ fn build_provider(args: &Args) -> Result<Arc<dyn LLMProvider>, Box<dyn std::erro
             let key = api_key.ok_or("cerebras backend requires CEREBRAS_API_KEY")?;
             Arc::new(OpenAICompatibleProvider::cerebras(key, model))
         }
+        Backend::Deepseek => {
+            let key = api_key.ok_or("deepseek backend requires DEEPSEEK_API_KEY (get one at platform.deepseek.com)")?;
+            Arc::new(OpenAICompatibleProvider::deepseek(key, model))
+        }
+        Backend::Sambanova => {
+            let key = api_key.ok_or("sambanova backend requires SAMBANOVA_API_KEY (get one at cloud.sambanova.ai/apis)")?;
+            Arc::new(OpenAICompatibleProvider::sambanova(key, model))
+        }
+        Backend::Gemini => {
+            let key = api_key.ok_or("gemini backend requires GEMINI_API_KEY (get one at aistudio.google.com/apikey)")?;
+            Arc::new(OpenAICompatibleProvider::gemini(key, model))
+        }
+        Backend::Github => {
+            let key = api_key.ok_or("github backend requires GITHUB_TOKEN with models:read scope")?;
+            Arc::new(OpenAICompatibleProvider::github(key, model))
+        }
+        Backend::Nvidia => {
+            let key = api_key.ok_or("nvidia backend requires NVIDIA_API_KEY (get one at build.nvidia.com)")?;
+            Arc::new(OpenAICompatibleProvider::nvidia(key, model))
+        }
+        Backend::Hyperbolic => {
+            let key = api_key.ok_or("hyperbolic backend requires HYPERBOLIC_API_KEY")?;
+            Arc::new(OpenAICompatibleProvider::hyperbolic(key, model))
+        }
+        Backend::Xai => {
+            let key = api_key.ok_or("xai backend requires XAI_API_KEY (get one at console.x.ai)")?;
+            Arc::new(OpenAICompatibleProvider::xai(key, model))
+        }
+        Backend::Pollinations => Arc::new(OpenAICompatibleProvider::pollinations(model)),
         Backend::Openai => {
             let key = api_key.ok_or("openai backend requires OPENAI_API_KEY")?;
             Arc::new(OpenAICompatibleProvider::openai(key, model))

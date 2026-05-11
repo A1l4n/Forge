@@ -168,6 +168,93 @@ impl OpenAICompatibleProvider {
         Self::new("cerebras", "https://api.cerebras.ai/v1", Some(api_key), model)
     }
 
+    /// DeepSeek — chat + reasoning models. Cheap; gives free credits on signup.
+    /// Get a key at https://platform.deepseek.com/api_keys.
+    pub fn deepseek(api_key: String, model: impl Into<String>) -> Self {
+        Self::new(
+            "deepseek",
+            "https://api.deepseek.com/v1",
+            Some(api_key),
+            model,
+        )
+    }
+
+    /// SambaNova Cloud — generous free tier hosting Llama-3.3-70B + DeepSeek.
+    /// Get a key at https://cloud.sambanova.ai/apis.
+    pub fn sambanova(api_key: String, model: impl Into<String>) -> Self {
+        Self::new(
+            "sambanova",
+            "https://api.sambanova.ai/v1",
+            Some(api_key),
+            model,
+        )
+    }
+
+    /// Google Gemini via OpenAI-compatible endpoint. Free tier: 15 RPM,
+    /// 1M tokens/day for `gemini-2.0-flash`.
+    /// Get a key at https://aistudio.google.com/apikey.
+    pub fn gemini(api_key: String, model: impl Into<String>) -> Self {
+        Self::new(
+            "gemini",
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            Some(api_key),
+            model,
+        )
+    }
+
+    /// GitHub Models — free with any GitHub account. Hosts GPT-4o-mini,
+    /// Llama, Phi, Mistral and more.
+    /// Get a token at https://github.com/settings/personal-access-tokens.
+    pub fn github(api_key: String, model: impl Into<String>) -> Self {
+        Self::new(
+            "github",
+            "https://models.inference.ai.azure.com",
+            Some(api_key),
+            model,
+        )
+    }
+
+    /// NVIDIA NIM (build.nvidia.com) — free credits, hosts Llama-3.3-70B,
+    /// DeepSeek-R1, Mixtral and more.
+    /// Get a key at https://build.nvidia.com.
+    pub fn nvidia(api_key: String, model: impl Into<String>) -> Self {
+        Self::new(
+            "nvidia",
+            "https://integrate.api.nvidia.com/v1",
+            Some(api_key),
+            model,
+        )
+    }
+
+    /// Hyperbolic — fast free-tier inference for Llama-3.3, DeepSeek, Qwen.
+    /// Get a key at https://app.hyperbolic.xyz/settings.
+    pub fn hyperbolic(api_key: String, model: impl Into<String>) -> Self {
+        Self::new(
+            "hyperbolic",
+            "https://api.hyperbolic.xyz/v1",
+            Some(api_key),
+            model,
+        )
+    }
+
+    /// xAI Grok — free with X Premium subscription.
+    /// Get a key at https://console.x.ai.
+    pub fn xai(api_key: String, model: impl Into<String>) -> Self {
+        Self::new("xai", "https://api.x.ai/v1", Some(api_key), model)
+    }
+
+    /// Pollinations — completely free, NO API KEY required. Community-funded
+    /// public inference. Best for development/testing.
+    /// Models: openai (gpt-4o-mini), llama, mistral, deepseek and more.
+    pub fn pollinations(model: impl Into<String>) -> Self {
+        Self::new(
+            "pollinations",
+            "https://text.pollinations.ai/openai",
+            None,
+            model,
+        )
+    }
+
     pub fn with_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
         self.max_tokens = max_tokens;
         self
