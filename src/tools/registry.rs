@@ -2097,6 +2097,14 @@ mod builtin {
     // ── Binance helpers ──────────────────────────────────────────────────────
 
     fn binance_base() -> String {
+        // Route through Cloudflare Worker proxy when set (bypasses GCP US geo-block).
+        // The worker receives /binance/api/* and forwards to api.binance.com/api/*.
+        if let Ok(proxy) = std::env::var("BINANCE_PROXY_URL") {
+            let base = proxy.trim_end_matches('/').to_string();
+            if !base.is_empty() {
+                return base; // e.g. https://exchange-proxy.xxx.workers.dev/binance
+            }
+        }
         if std::env::var("BINANCE_TESTNET")
             .map(|v| v.to_ascii_lowercase() == "true")
             .unwrap_or(false)
@@ -2105,6 +2113,10 @@ mod builtin {
         } else {
             "https://api.binance.com".to_string()
         }
+    }
+
+    fn binance_proxy_secret() -> Option<String> {
+        std::env::var("BINANCE_PROXY_SECRET").ok().filter(|s| !s.trim().is_empty())
     }
 
     fn binance_sign(params: &str, secret: &str) -> String {
@@ -2129,9 +2141,11 @@ mod builtin {
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| Error::ToolExecution(format!("http client: {}", e)))?;
-        let resp = client
-            .get(url)
-            .header("X-MBX-APIKEY", api_key)
+        let mut req = client.get(url).header("X-MBX-APIKEY", api_key);
+        if let Some(secret) = binance_proxy_secret() {
+            req = req.header("X-Proxy-Secret", secret);
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
@@ -2404,11 +2418,13 @@ mod builtin {
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
-        let resp = client
+        let mut req = client
             .post(&url)
             .header("X-MBX-APIKEY", &api_key)
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body)
+            .body(body);
+        if let Some(ps) = binance_proxy_secret() { req = req.header("X-Proxy-Secret", ps); }
+        let resp = req
             .send()
             .await
             .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
@@ -2469,9 +2485,11 @@ mod builtin {
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
-        let resp = client
+        let mut req = client
             .delete(&url)
-            .header("X-MBX-APIKEY", &api_key)
+            .header("X-MBX-APIKEY", &api_key);
+        if let Some(ps) = binance_proxy_secret() { req = req.header("X-Proxy-Secret", ps); }
+        let resp = req
             .send()
             .await
             .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
@@ -2493,6 +2511,14 @@ mod builtin {
     // ── Binance Futures helpers ──────────────────────────────────────────────
 
     fn binance_futures_base() -> String {
+        // Route through proxy when set: worker receives /binance/fapi/* and
+        // forwards to fapi.binance.com/fapi/*, same BINANCE_PROXY_URL base.
+        if let Ok(proxy) = std::env::var("BINANCE_PROXY_URL") {
+            let base = proxy.trim_end_matches('/').to_string();
+            if !base.is_empty() {
+                return base;
+            }
+        }
         if std::env::var("BINANCE_TESTNET")
             .map(|v| v.to_ascii_lowercase() == "true")
             .unwrap_or(false)
@@ -2693,11 +2719,13 @@ mod builtin {
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
-        let resp = client
+        let mut req = client
             .post(&url)
             .header("X-MBX-APIKEY", &api_key)
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body)
+            .body(body);
+        if let Some(ps) = binance_proxy_secret() { req = req.header("X-Proxy-Secret", ps); }
+        let resp = req
             .send()
             .await
             .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
@@ -2786,11 +2814,13 @@ mod builtin {
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
-        let resp = client
+        let mut req = client
             .post(&url)
             .header("X-MBX-APIKEY", &api_key)
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body)
+            .body(body);
+        if let Some(ps) = binance_proxy_secret() { req = req.header("X-Proxy-Secret", ps); }
+        let resp = req
             .send()
             .await
             .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
@@ -2853,9 +2883,11 @@ mod builtin {
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
-        let resp = client
+        let mut req = client
             .delete(&url)
-            .header("X-MBX-APIKEY", &api_key)
+            .header("X-MBX-APIKEY", &api_key);
+        if let Some(ps) = binance_proxy_secret() { req = req.header("X-Proxy-Secret", ps); }
+        let resp = req
             .send()
             .await
             .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
@@ -2908,11 +2940,13 @@ mod builtin {
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| Error::ToolExecution(format!("client: {}", e)))?;
-        let resp = client
+        let mut req = client
             .post(&url)
             .header("X-MBX-APIKEY", &api_key)
             .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body)
+            .body(body);
+        if let Some(ps) = binance_proxy_secret() { req = req.header("X-Proxy-Secret", ps); }
+        let resp = req
             .send()
             .await
             .map_err(|e| Error::ToolExecution(format!("request: {}", e)))?;
