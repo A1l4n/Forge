@@ -665,6 +665,165 @@
     border-top: 1px solid var(--border);
   }
 
+  /* ═══════════════ TRADING PANEL ═══════════════ */
+  .trade-quick-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+  .trade-quick-bar button {
+    background: var(--bg-elev-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .trade-quick-bar button:hover {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .trade-quick-bar button.danger:hover {
+    background: rgba(248, 81, 73, 0.1);
+    border-color: var(--error);
+    color: var(--error);
+  }
+  .trade-quick-bar button.ok-btn:hover {
+    background: rgba(86, 211, 100, 0.1);
+    border-color: var(--ok);
+    color: var(--ok);
+  }
+  .checklist-panel {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 20px;
+  }
+  .checklist-panel h4 {
+    margin: 0 0 10px;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    letter-spacing: 1.5px;
+    font-weight: 700;
+  }
+  .checklist-items {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 6px;
+  }
+  .cl-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    font-size: 12px;
+    background: var(--bg-elev-2);
+    cursor: pointer;
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .cl-item:hover { border-color: var(--accent); }
+  .cl-item.done { border-color: var(--ok); }
+  .cl-item .cl-dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--border-strong);
+    flex-shrink: 0;
+    transition: all 0.15s;
+  }
+  .cl-item.done .cl-dot {
+    background: var(--ok);
+    border-color: var(--ok);
+  }
+  .cl-item .cl-label { color: var(--text-dim); font-size: 11px; }
+  .cl-item.done .cl-label { color: var(--text); }
+  .watchlist-panel {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+  .watchlist-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev-2);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .watchlist-header h4 {
+    margin: 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    letter-spacing: 1.5px;
+    font-weight: 700;
+  }
+  .watchlist-coins {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 14px;
+  }
+  .coin-chip {
+    background: var(--bg-elev-3);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .coin-chip:hover {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .coin-chip .change {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .coin-chip .change.pos { background: rgba(86,211,100,0.15); color: var(--ok); }
+  .coin-chip .change.neg { background: rgba(248,81,73,0.15); color: var(--error); }
+  .kpi.trading-balance::before { background: #f0a847; }
+  .kpi-value.pos { color: var(--ok); }
+  .kpi-value.neg { color: var(--error); }
+  .risk-bar-wrap {
+    margin-top: 8px;
+    height: 4px;
+    background: var(--bg-elev-2);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .risk-bar {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.5s;
+    background: var(--ok);
+  }
+  .risk-bar.medium { background: var(--warn); }
+  .risk-bar.high { background: var(--error); }
+
   /* ═══════════════ LOGIN OVERLAY ═══════════════ */
   #login-overlay {
     position: fixed;
@@ -808,7 +967,7 @@
     <nav class="tabs">
       <button class="active" data-tab="chat">💬 Chat</button>
       <button data-tab="kanban">📋 Tasks</button>
-      <button data-tab="mission">🛰 Stats</button>
+      <button data-tab="mission">📊 Mission Control</button>
     </nav>
     <div class="meta">
       <div class="meta-item">Provider: <b id="m-provider">…</b></div>
@@ -905,41 +1064,130 @@
     <!-- ═══════════════ MISSION CONTROL VIEW ═══════════════ -->
     <section class="view" id="view-mission">
       <div class="mc-header">
-        <h2>Mission Control</h2>
+        <h2>📊 Mission Control</h2>
         <button class="btn" onclick="refreshMission()">↻ Refresh</button>
       </div>
 
-      <!-- KPI tiles -->
-      <div class="mc-grid">
-        <div class="kpi">
-          <div class="kpi-label">Total Tasks</div>
-          <div class="kpi-value" id="kpi-total">—</div>
-          <div class="kpi-sub" id="kpi-total-sub">all-time</div>
+      <!-- Trading Quick Actions -->
+      <div class="trade-quick-bar">
+        <button onclick="quickSend('Check my Binance futures balance and open positions')">💰 Balance</button>
+        <button onclick="quickSend('Scan top 20 crypto futures movers right now and identify the 3 best long setups using the pre-trade checklist')">🔍 Scan Markets</button>
+        <button onclick="quickSend('Run the full 10-step pre-trade checklist for current market conditions')">✅ Pre-Trade Check</button>
+        <button onclick="quickSend('What are my open futures positions? Show entry, current P&L, and whether I should close or hold based on the setup')">📈 Open Positions</button>
+        <button class="ok-btn" onclick="quickSend('Find the single highest-quality trade setup right now — long or short. Use Weinstein stage analysis + ICT order blocks + liquidity. Score it 1-10.')">⚡ Best Setup</button>
+        <button onclick="quickSend('Show my trading journal — list all recent trade logs from memory with results and lessons learned')">📓 Trade Journal</button>
+        <button class="danger" onclick="quickSend('Show total portfolio risk right now: how many USDC at risk across all open positions, total portfolio heat %, and whether I need to reduce exposure')">⚠️ Risk Check</button>
+      </div>
+
+      <!-- Pre-Trade Checklist (manual tracker) -->
+      <div class="checklist-panel">
+        <h4>⚡ Pre-Trade Checklist — tap to track progress</h4>
+        <div class="checklist-items" id="checklist-items">
+          <div class="cl-item" data-step="1" onclick="toggleCheck(this)">
+            <div class="cl-dot"></div><span class="cl-label">1 · Macro Regime (BTC Stage)</span>
+          </div>
+          <div class="cl-item" data-step="2" onclick="toggleCheck(this)">
+            <div class="cl-dot"></div><span class="cl-label">2 · HTF Structure (Daily/Weekly)</span>
+          </div>
+          <div class="cl-item" data-step="3" onclick="toggleCheck(this)">
+            <div class="cl-dot"></div><span class="cl-label">3 · 4H Structure (BOS / CHoCH)</span>
+          </div>
+          <div class="cl-item" data-step="4" onclick="toggleCheck(this)">
+            <div class="cl-dot"></div><span class="cl-label">4 · Entry Trigger (1H/15m)</span>
+          </div>
+          <div class="cl-item" data-step="5" onclick="toggleCheck(this)">
+            <div class="cl-dot"></div><span class="cl-label">5 · Liquidity Sweep confirmed</span>
+          </div>
+          <div class="cl-item" data-step="6" onclick="toggleCheck(this)">
+            <div class="cl-dot"></div><span class="cl-label">6 · Setup Score ≥ 7/10</span>
+          </div>
+          <div class="cl-item" data-step="7" onclick="toggleCheck(this)">
+            <div class="cl-dot"></div><span class="cl-label">7 · Entry defined (price + trigger)</span>
+          </div>
+          <div class="cl-item" data-step="8" onclick="toggleCheck(this)">
+            <div class="cl-dot"></div><span class="cl-label">8 · Stop-loss placed (GTC)</span>
+          </div>
+          <div class="cl-item" data-step="9" onclick="toggleCheck(this)">
+            <div class="cl-dot"></div><span class="cl-label">9 · Take-profit set (R:R ≥ 2:1)</span>
+          </div>
+          <div class="cl-item" data-step="10" onclick="toggleCheck(this)">
+            <div class="cl-dot"></div><span class="cl-label">10 · Position sized (≤ 2% risk)</span>
+          </div>
         </div>
-        <div class="kpi green">
-          <div class="kpi-label">Completed</div>
-          <div class="kpi-value" id="kpi-done">—</div>
-          <div class="kpi-sub" id="kpi-done-sub">—</div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+          <span id="cl-progress" style="font-size:12px;color:var(--text-dim);">0 / 10 steps done</span>
+          <button class="btn" style="padding:4px 10px;font-size:11px;" onclick="resetChecklist()">Reset</button>
         </div>
-        <div class="kpi red">
-          <div class="kpi-label">Failed</div>
-          <div class="kpi-value" id="kpi-failed">—</div>
-          <div class="kpi-sub" id="kpi-failed-sub">—</div>
+      </div>
+
+      <!-- Watchlist -->
+      <div class="watchlist-panel">
+        <div class="watchlist-header">
+          <h4>👀 Watchlist — click to analyze</h4>
+          <button class="btn" style="font-size:11px;padding:4px 10px;" onclick="quickSend('Update my watchlist — scan these pairs and give a quick 1-line setup status for each: BTC, ETH, SOL, BNB, LINK, AVAX, ARB, SUI')">Update</button>
         </div>
-        <div class="kpi blue">
-          <div class="kpi-label">Running</div>
-          <div class="kpi-value" id="kpi-running">—</div>
-          <div class="kpi-sub">in flight now</div>
+        <div class="watchlist-coins">
+          <div class="coin-chip" onclick="quickSend('Analyze BTCUSDC for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+            BTC <span class="change" id="wl-btc">…</span>
+          </div>
+          <div class="coin-chip" onclick="quickSend('Analyze ETHUSDC for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+            ETH <span class="change" id="wl-eth">…</span>
+          </div>
+          <div class="coin-chip" onclick="quickSend('Analyze SOLUSDC for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+            SOL <span class="change" id="wl-sol">…</span>
+          </div>
+          <div class="coin-chip" onclick="quickSend('Analyze BNBUSDC for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+            BNB <span class="change" id="wl-bnb">…</span>
+          </div>
+          <div class="coin-chip" onclick="quickSend('Analyze LINKUSDC for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+            LINK <span class="change" id="wl-link">…</span>
+          </div>
+          <div class="coin-chip" onclick="quickSend('Analyze AVAXUSDC for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+            AVAX <span class="change" id="wl-avax">…</span>
+          </div>
+          <div class="coin-chip" onclick="quickSend('Analyze ARBUSDC for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+            ARB <span class="change" id="wl-arb">…</span>
+          </div>
+          <div class="coin-chip" onclick="quickSend('Analyze SUIUSDC for a futures trade setup right now: Weinstein stage, 4H structure, order blocks, R:R. Score 1-10.')">
+            SUI <span class="change" id="wl-sui">…</span>
+          </div>
         </div>
-        <div class="kpi purple">
-          <div class="kpi-label">Sessions</div>
-          <div class="kpi-value" id="kpi-sessions">—</div>
-          <div class="kpi-sub" id="kpi-sessions-sub">—</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-label">Tokens In / Out</div>
-          <div class="kpi-value" id="kpi-tokens">— / —</div>
-          <div class="kpi-sub">since startup</div>
+      </div>
+
+      <!-- KPI tiles — System stats -->
+      <div class="mc-section">
+        <h3>System Stats</h3>
+        <div class="mc-grid">
+          <div class="kpi">
+            <div class="kpi-label">Total Tasks</div>
+            <div class="kpi-value" id="kpi-total">—</div>
+            <div class="kpi-sub" id="kpi-total-sub">all-time</div>
+          </div>
+          <div class="kpi green">
+            <div class="kpi-label">Completed</div>
+            <div class="kpi-value" id="kpi-done">—</div>
+            <div class="kpi-sub" id="kpi-done-sub">—</div>
+          </div>
+          <div class="kpi red">
+            <div class="kpi-label">Failed</div>
+            <div class="kpi-value" id="kpi-failed">—</div>
+            <div class="kpi-sub" id="kpi-failed-sub">—</div>
+          </div>
+          <div class="kpi blue">
+            <div class="kpi-label">Running</div>
+            <div class="kpi-value" id="kpi-running">—</div>
+            <div class="kpi-sub">in flight now</div>
+          </div>
+          <div class="kpi purple">
+            <div class="kpi-label">Sessions</div>
+            <div class="kpi-value" id="kpi-sessions">—</div>
+            <div class="kpi-sub" id="kpi-sessions-sub">—</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Tokens In / Out</div>
+            <div class="kpi-value" id="kpi-tokens">— / —</div>
+            <div class="kpi-sub">since startup</div>
+          </div>
         </div>
       </div>
 
@@ -958,7 +1206,7 @@
       </div>
 
       <div class="footer">
-        Forge <span id="m-version">v?</span> · Powered by Claude / Ollama / OpenAI-compatible models
+        Luna <span id="m-version">v?</span> · Built on Forge · Powered by Gemini / Claude / OpenAI-compatible
       </div>
     </section>
   </main>
@@ -1510,8 +1758,80 @@ addMessage = function(role, content, agentName) {
   return result;
 };
 
+// ═══════════════ TRADING QUICK ACTIONS ═══════════════
+
+// Send a preset message to Luna (opens chat tab and submits)
+function quickSend(msg) {
+  // Switch to chat tab
+  const chatBtn = document.querySelector('nav.tabs button[data-tab="chat"]');
+  if (chatBtn) chatBtn.click();
+  // Pre-fill and send
+  const input = document.getElementById('input');
+  if (!input) return;
+  input.value = msg;
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+  // Submit
+  const form = document.querySelector('.composer');
+  if (form) form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+}
+
+// ═══════════════ PRE-TRADE CHECKLIST ═══════════════
+
+const CL_KEY = 'luna_pretrade_checklist';
+
+function loadChecklistState() {
+  try {
+    return JSON.parse(localStorage.getItem(CL_KEY) || '{}');
+  } catch { return {}; }
+}
+
+function saveChecklistState(state) {
+  localStorage.setItem(CL_KEY, JSON.stringify(state));
+}
+
+function initChecklist() {
+  const state = loadChecklistState();
+  const items = document.querySelectorAll('.cl-item');
+  let done = 0;
+  items.forEach(item => {
+    const step = item.dataset.step;
+    if (state[step]) {
+      item.classList.add('done');
+      done++;
+    }
+  });
+  updateChecklistProgress(done, items.length);
+}
+
+function toggleCheck(el) {
+  const step = el.dataset.step;
+  el.classList.toggle('done');
+  const state = loadChecklistState();
+  state[step] = el.classList.contains('done');
+  saveChecklistState(state);
+  const items = document.querySelectorAll('.cl-item');
+  const done = document.querySelectorAll('.cl-item.done').length;
+  updateChecklistProgress(done, items.length);
+}
+
+function updateChecklistProgress(done, total) {
+  const el = document.getElementById('cl-progress');
+  if (!el) return;
+  el.textContent = `${done} / ${total} steps done`;
+  el.style.color = done === total ? 'var(--ok)' : done >= 7 ? 'var(--warn)' : 'var(--text-dim)';
+}
+
+function resetChecklist() {
+  localStorage.removeItem(CL_KEY);
+  document.querySelectorAll('.cl-item').forEach(el => el.classList.remove('done'));
+  updateChecklistProgress(0, 10);
+}
+
 // Boot — checks auth, then loads if allowed (or shows login overlay).
 checkAuthThenBoot();
+// Init checklist state from localStorage
+initChecklist();
 </script>
 </body>
 </html>
